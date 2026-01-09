@@ -1,0 +1,92 @@
+## **Python**
+
+**Python 3.11.8**
+
+- 최신 안정판
+- 성능 좋음
+- Django, Celery, LangChain 전부 호환됨
+
+---
+
+## **Django**
+
+**Django 4.2.11 (LTS)**
+
+- LTS = 장기지원
+- 2026년까지 보안 패치
+- 기업/서비스 운영용 표준
+
+---
+
+## **Django REST Framework**
+
+**djangorestframework 3.14.0**
+
+- Django 4.2와 안정적으로 호환
+- 문서/사례 많음
+
+---
+
+## **Celery**
+
+**Celery 5.3.6**
+
+- Python 3.11 지원
+- 안정화된 최신 5.x
+- 대규모 서비스에서도 많이 사용
+
+---
+
+## **Broker**
+
+### 
+
+**Redis 7.2**
+
+**RabbitMQ 3.12**
+
+---
+
+## **Gunicorn**
+
+**gunicorn 21.2.0**
+
+---
+
+## **Nginx**
+
+**nginx 1.24 (stable)**
+
+---
+
+## **LangChain**
+
+**langchain 0.1.16**
+
+※ LangChain은 변동이 심해서 **반드시 버전 고정**해야 함
+
+---
+
+## **OpenSearch**
+
+**OpenSearch 2.11.1**
+
+- 벡터 검색 안정적
+- kNN 잘 됨
+- 문서 많음
+
+---
+
+## **MySQL (Cloud SQL)**
+
+**MySQL 8.0.36**
+
+- Cloud SQL 기본
+- 성능/보안 안정
+- JSON, 인덱싱 기능 풍부
+
+---
+
+## **Docker**
+
+**Docker 24.x**

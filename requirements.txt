@@ -1,0 +1,21 @@
+# Django
+Django==4.2.11
+djangorestframework==3.14.0
+
+# Celery
+celery==5.3.6
+redis==5.0.1
+
+# Server
+gunicorn==21.2.0
+
+# LangChain
+langchain==0.1.16
+langchain-openai==0.0.8
+
+# Database
+PyMySQL==1.1.0
+opensearch-py==2.4.2
+
+# Utilities
+python-dotenv==1.0.1
