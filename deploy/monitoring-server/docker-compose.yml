@@ -1,0 +1,119 @@
+version: '3.8'
+
+# =============================================================================
+# Monitoring Server (GCE VM 3)
+# - Fluent Bit (로그 수집)
+# - OpenSearch + Dashboards (로깅용)
+# - Prometheus (메트릭 수집)
+# - cAdvisor (컨테이너 모니터링)
+# - Alertmanager (Slack 알림)
+# - Grafana (대시보드)
+# =============================================================================
+
+services:
+  # =========================================================================
+  # Logging Stack
+  # =========================================================================
+
+  # OpenSearch for Logging
+  opensearch-logging:
+    image: opensearchproject/opensearch:2.11.1
+    environment:
+      - cluster.name=logging-cluster
+      - node.name=opensearch-logging
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_logging_data:/usr/share/opensearch/data
+    restart: always
+
+  # OpenSearch Dashboards for Log Visualization
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.1
+    ports:
+      - "5601:5601"
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch-logging:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    depends_on:
+      - opensearch-logging
+    restart: always
+
+  # Fluent Bit - Log Collector
+  fluent-bit:
+    image: fluent/fluent-bit:2.2
+    ports:
+      - "24224:24224"  # Forward input
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+      - ./parsers.conf:/fluent-bit/etc/parsers.conf
+    depends_on:
+      - opensearch-logging
+    restart: always
+
+  # =========================================================================
+  # Metrics Stack
+  # =========================================================================
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./alert-rules.yml:/etc/prometheus/alert-rules.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: always
+
+  # Alertmanager - Slack 알림
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    restart: always
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.2.2
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    restart: always
+
+  # cAdvisor
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    privileged: true
+    restart: always
+
+volumes:
+  opensearch_logging_data:
+  prometheus_data:
+  grafana_data:

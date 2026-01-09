@@ -1,0 +1,118 @@
+groups:
+  - name: server-alerts
+    rules:
+      # 서버 다운
+      - alert: ServerDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Server {{ $labels.instance }} is down"
+          description: "{{ $labels.job }} server has been down for more than 1 minute."
+
+      # 높은 CPU 사용률
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 80% for more than 5 minutes."
+
+      # 높은 메모리 사용률
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 85% for more than 5 minutes."
+
+      # 디스크 공간 부족
+      - alert: LowDiskSpace
+        expr: (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk space is below 15%."
+
+  - name: application-alerts
+    rules:
+      # Django 서버 다운
+      - alert: DjangoDown
+        expr: up{job="django"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Django application is down"
+          description: "Django server has been down for more than 1 minute."
+
+      # 높은 응답 시간
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(django_http_requests_latency_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time on Django"
+          description: "95th percentile response time is above 2 seconds."
+
+      # 높은 에러율
+      - alert: HighErrorRate
+        expr: sum(rate(django_http_responses_total_by_status_total{status=~"5.."}[5m])) / sum(rate(django_http_responses_total_by_status_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate on Django"
+          description: "Error rate is above 5%."
+
+  - name: queue-alerts
+    rules:
+      # Redis 다운
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis server has been down for more than 1 minute."
+
+      # RabbitMQ 다운
+      - alert: RabbitMQDown
+        expr: up{job="rabbitmq"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RabbitMQ is down"
+          description: "RabbitMQ server has been down for more than 1 minute."
+
+      # Celery 큐 적체
+      - alert: CeleryQueueBacklog
+        expr: celery_queue_length > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery queue backlog"
+          description: "Celery queue has more than 1000 pending tasks."
+
+  - name: database-alerts
+    rules:
+      # OpenSearch 다운
+      - alert: OpenSearchDown
+        expr: up{job="opensearch"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenSearch is down"
+          description: "OpenSearch server has been down for more than 1 minute."

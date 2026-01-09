@@ -1,0 +1,72 @@
+우리는 이미지 기반 상품 탐색 + 가상 피팅 + 원터치 구매를 목표로 하는 웹 서비스를 개발한다.
+
+사용자가 이미지를 업로드하면:
+	1.	Google Vision API로 이미지에서 신발/가방/상의/하의/아우터/모자/스커트 등을 탐지하고(bbox)
+	2.	각 bbox 영역을 크롭한 뒤
+	3.	OpenAI Embeddings API로 벡터화
+	4.	OpenSearch k-NN으로 상품 유사도 검색
+	5.	각 탐지된 항목마다 Top1 상품을 선택
+	6.	해당 결과를 MySQL에 히스토리로 저장
+	7.	프론트는 원본 이미지 위에 bbox 오버레이 + Top1 상품 표시
+	8.	유저가 선택하면 fashn.ai API로 가상 피팅 이미지를 생성
+
+1. 이미지 업로드
+	•	React → Django
+	•	Django → GCS 업로드
+	•	MySQL: input_images 저장
+	•	MySQL: analyses 생성 (PENDING)
+	•	Redis: analysis:{id}:status = PENDING (TTL 24h)
+	•	RabbitMQ: Celery task 발행
+
+⸻
+
+2. Worker 분석 파이프라인
+
+Worker는 다음을 수행한다:
+	1.	Redis: status = RUNNING
+	2.	Google Vision API로 bbox 탐지
+	3.	MySQL: detected_items 저장
+	4.	bbox 기준으로 크롭 → GCS 업로드
+	5.	OpenAI Embeddings API로 벡터 생성
+	6.	OpenSearch k-NN 검색 → Top1 product_id 반환
+	7.	MySQL: product_matches 저장 (Top1)
+	8.	MySQL: analyses.status = DONE
+	9.	Redis: status = DONE, progress = 100
+
+
+
+3. 프론트 폴링 구조
+	•	Redis에서 먼저 조회
+	•	없으면 MySQL fallback
+상태 확인
+GET /api/v1/analyses/{analysis_id}/status
+
+결과조회
+GET /api/v1/analyses/{analysis_id}/result
+	•	MySQL에서만 조회
+	•	detected_items + product_matches + products join
+
+
+
+
+
+LangChain + GPT는 다음 역할을 한다:
+	•	OpenSearch 결과 품질 평가
+	•	검색 필터 자동 조정
+	•	브랜드/카테고리/가격대 반영
+	•	필요 시 재검색 루프 실행
+
+Agent는 Worker에서도 사용 가능하고 Django에서도 사용 가능해야 하므로 공용 모듈로 설계한다.
+
+⸻
+
+OpenSearch 인덱스 정책
+
+OpenSearch에는 최소한의 필드만 저장:
+	•	product_id
+	•	embedding
+	•	category (선택)
+	•	brand (선택)
+
+MySQL이 정답 데이터 원본이다.
+

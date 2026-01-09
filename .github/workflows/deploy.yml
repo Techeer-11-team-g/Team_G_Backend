@@ -1,0 +1,114 @@
+name: Deploy to GCE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCE_ZONE: asia-northeast3-a
+
+jobs:
+  # ==========================================================================
+  # Build and Push Docker Image
+  # ==========================================================================
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t gcr.io/$PROJECT_ID/team-g-backend:${{ github.sha }} .
+          docker build -t gcr.io/$PROJECT_ID/team-g-backend:latest .
+          docker push gcr.io/$PROJECT_ID/team-g-backend:${{ github.sha }}
+          docker push gcr.io/$PROJECT_ID/team-g-backend:latest
+
+  # ==========================================================================
+  # Deploy to App Server
+  # ==========================================================================
+  deploy-app:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy to App Server
+        run: |
+          gcloud compute ssh app-server --zone=$GCE_ZONE --command="
+            cd ~/Team_G_Backend/deploy/app-server && \
+            docker-compose pull && \
+            docker-compose up -d && \
+            docker-compose exec -T web python manage.py migrate --noinput && \
+            docker-compose exec -T web python manage.py collectstatic --noinput
+          "
+
+  # ==========================================================================
+  # Deploy to Queue Server (Celery)
+  # ==========================================================================
+  deploy-queue:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy to Queue Server
+        run: |
+          gcloud compute ssh queue-server --zone=$GCE_ZONE --command="
+            cd ~/Team_G_Backend/deploy/queue-server && \
+            docker-compose pull && \
+            docker-compose up -d
+          "
+
+  # ==========================================================================
+  # Notify Slack
+  # ==========================================================================
+  notify:
+    needs: [deploy-app, deploy-queue]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Slack Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

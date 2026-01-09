@@ -1,0 +1,52 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - '/etc/prometheus/alert-rules.yml'
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # cAdvisor - local container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # =========================================================================
+  # App Server (Django)
+  # IP를 App Server 내부 IP로 변경하세요
+  # =========================================================================
+  - job_name: 'django'
+    static_configs:
+      - targets: ['APP_SERVER_PRIVATE_IP:8000']
+    metrics_path: /metrics
+
+  # =========================================================================
+  # Queue Server (Redis, RabbitMQ)
+  # IP를 Queue Server 내부 IP로 변경하세요
+  # =========================================================================
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['QUEUE_SERVER_PRIVATE_IP:9121']
+
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['QUEUE_SERVER_PRIVATE_IP:15692']
+
+  # =========================================================================
+  # Search Server (OpenSearch)
+  # IP를 Search Server 내부 IP로 변경하세요
+  # =========================================================================
+  - job_name: 'opensearch'
+    static_configs:
+      - targets: ['SEARCH_SERVER_PRIVATE_IP:9200']
+    metrics_path: /_prometheus/metrics

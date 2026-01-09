@@ -1,0 +1,97 @@
+version: '3.8'
+
+# =============================================================================
+# Queue Server (GCE VM 2)
+# - Redis
+# - RabbitMQ
+# - Celery Worker + Beat
+#
+# 외부 API 통신: OpenAI, Google Vision API, fashn-ai
+# =============================================================================
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis123}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+      - "15692:15692"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitmq123}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: always
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Celery Worker - 외부 API 호출 담당
+  celery-worker:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    command: celery -A config worker -l info --concurrency=4
+    volumes:
+      - log_volume:/app/logs
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-rabbitmq123}@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+    depends_on:
+      - redis
+      - rabbitmq
+    restart: always
+
+  # Celery Beat - 스케줄러
+  celery-beat:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    command: celery -A config beat -l info
+    volumes:
+      - log_volume:/app/logs
+    env_file:
+      - .env
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-rabbitmq123}@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+    depends_on:
+      - redis
+      - rabbitmq
+      - celery-worker
+    restart: always
+
+  # Redis Exporter for Prometheus
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.55.0
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+    depends_on:
+      - redis
+    restart: always
+
+volumes:
+  redis_data:
+  rabbitmq_data:
+  log_volume:

@@ -34,12 +34,15 @@ INSTALLED_APPS = [
     'rest_framework',
     'django_prometheus',
     'storages',
+    'corsheaders',
     # Local apps
+    'analyses',
 ]
 
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -180,6 +183,20 @@ LANGCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY', '')
 
 
 # =============================================================================
+# fashn.ai Configuration
+# =============================================================================
+
+FASHN_API_KEY = os.getenv('FASHN_API_KEY', '')
+
+
+# =============================================================================
+# Google Vision API Configuration
+# =============================================================================
+
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
+
+
+# =============================================================================
 # Django REST Framework
 # =============================================================================
 
@@ -266,3 +283,11 @@ LOGGING = {
         },
     },
 }
+
+
+# =============================================================================
+# CORS Configuration
+# =============================================================================
+
+CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+CORS_ALLOW_CREDENTIALS = True
