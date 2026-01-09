@@ -4,28 +4,64 @@
 # Virtual environment
 venv/
 .venv/
+env/
 
 # Python
 __pycache__/
 *.py[cod]
 *.so
 .Python
+*.egg-info/
+dist/
+build/
 
-# Environment variables
+# Environment variables (중요!)
 .env
 .env.local
+.env.production
 
 # IDE
 .vscode/
 .idea/
 *.swp
+*.swo
 
 # OS
 .DS_Store
 Thumbs.db
 
 # Logs
+logs/
 *.log
 
 # Database
 *.sqlite3
+db.sqlite3
+
+# Django
+staticfiles/
+media/
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
+
+# GCS credentials (중요!)
+*-credentials.json
+*-service-account.json
+gcs-*.json
+
+# Docker (선택 - 로컬 볼륨 데이터)
+# docker-compose.override.yml
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
