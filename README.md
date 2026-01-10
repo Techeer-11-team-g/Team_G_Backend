@@ -232,7 +232,7 @@ git clone <repository-url>
 cd Team_G_Backend
 
 # 2. 가상환경 만들기
-python -m venv venv
+python3.11 -m venv venv
 
 # 3. 가상환경 활성화
 venv\Scripts\activate
