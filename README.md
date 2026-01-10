@@ -54,7 +54,7 @@ LangChain으로 검색 품질 평가
 
 | 분류 | 기술 | 버전 | 용도 |
 |------|------|------|------|
-| **Backend** | Python | 3.11+ | 프로그래밍 언어 |
+| **Backend** | Python | 3.11.8 (필수) | 프로그래밍 언어 |
 | | Django | 4.2.11 LTS | 웹 프레임워크 |
 | | Django REST Framework | 3.14.0 | REST API |
 | | Gunicorn | 21.2.0 | 운영 서버 |
@@ -134,8 +134,47 @@ Team_G_Backend/
 ### 사전 준비물
 
 1. **Git** - 코드 다운로드용
-2. **Python 3.11 이상** - [다운로드](https://www.python.org/downloads/)
+2. **Python 3.11.8 (정확한 버전 필수)** - pyenv로 설치 권장
 3. **Docker Desktop** - [다운로드](https://www.docker.com/products/docker-desktop/)
+
+> **중요:** 팀 전체가 Python 3.11.8 버전을 사용합니다. 다른 버전 사용 시 패키지 호환성 문제가 발생할 수 있습니다.
+
+### pyenv로 Python 3.11.8 설치 (권장)
+
+pyenv를 사용하면 여러 Python 버전을 쉽게 관리할 수 있습니다.
+
+#### Mac (Homebrew)
+
+```bash
+# pyenv 설치
+brew install pyenv
+
+# 쉘 설정 추가 (zsh 기준)
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(pyenv init -)"' >> ~/.zshrc
+
+# 터미널 재시작 또는
+source ~/.zshrc
+
+# Python 3.11.8 설치
+pyenv install 3.11.8
+
+# 전역 설정 (선택사항)
+pyenv global 3.11.8
+```
+
+#### Windows
+
+```bash
+# Windows에서는 pyenv-win 사용
+# PowerShell (관리자 권한)에서:
+Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/pyenv-win/pyenv-win/master/pyenv-win/install-pyenv-win.ps1" -OutFile "./install-pyenv-win.ps1"; &"./install-pyenv-win.ps1"
+
+# 터미널 재시작 후
+pyenv install 3.11.8
+pyenv global 3.11.8
+```
 
 ### 설치 확인 방법
 
@@ -146,9 +185,13 @@ Team_G_Backend/
 git --version
 # 예시 출력: git version 2.39.0
 
-# Python 확인
+# Python 확인 (반드시 3.11.8이어야 함!)
 python3 --version
-# 예시 출력: Python 3.11.4
+# 예시 출력: Python 3.11.8
+
+# pyenv 확인
+pyenv version
+# 예시 출력: 3.11.8 (set by /path/to/.python-version)
 
 # Docker 확인
 docker --version
@@ -199,25 +242,34 @@ docker-compose exec web python manage.py createsuperuser
 git clone <repository-url>
 cd Team_G_Backend
 
-# 2. 가상환경 만들기 (프로젝트별 독립된 Python 환경)
+# 2. Python 버전 확인 (반드시 3.11.8이어야 함!)
+python3 --version
+# Python 3.11.8이 아니면 pyenv로 설치 후 진행
+
+# 3. 가상환경 만들기 (Python 3.11.8로)
+# pyenv가 설치되어 있으면 프로젝트 디렉토리에서 자동으로 3.11.8 사용
 python3 -m venv venv
 
-# 3. 가상환경 활성화
+# 4. 가상환경 활성화
 source venv/bin/activate
 # 성공하면 터미널 앞에 (venv) 표시됨
 
-# 4. 패키지 설치
+# 5. Python 버전 재확인
+python --version
+# 반드시 Python 3.11.8 출력되어야 함
+
+# 6. 패키지 설치
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 5. 환경변수 설정
+# 7. 환경변수 설정
 cp .env.example .env
 # .env 파일 수정
 
-# 6. 데이터베이스 테이블 생성
+# 8. 데이터베이스 테이블 생성
 python manage.py migrate
 
-# 7. 개발 서버 실행
+# 9. 개발 서버 실행
 python manage.py runserver
 
 # 서버 종료: Ctrl + C
@@ -231,25 +283,33 @@ python manage.py runserver
 git clone <repository-url>
 cd Team_G_Backend
 
-# 2. 가상환경 만들기
-python3.11 -m venv venv
+# 2. Python 버전 확인 (반드시 3.11.8이어야 함!)
+python --version
+# Python 3.11.8이 아니면 pyenv-win으로 설치 후 진행
 
-# 3. 가상환경 활성화
+# 3. 가상환경 만들기 (Python 3.11.8로)
+python -m venv venv
+
+# 4. 가상환경 활성화
 venv\Scripts\activate
 # 성공하면 터미널 앞에 (venv) 표시됨
 
-# 4. 패키지 설치
+# 5. Python 버전 재확인
+python --version
+# 반드시 Python 3.11.8 출력되어야 함
+
+# 6. 패키지 설치
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 5. 환경변수 설정
+# 7. 환경변수 설정
 copy .env.example .env
 # .env 파일 메모장으로 수정
 
-# 6. 데이터베이스 테이블 생성
+# 8. 데이터베이스 테이블 생성
 python manage.py migrate
 
-# 7. 개발 서버 실행
+# 9. 개발 서버 실행
 python manage.py runserver
 
 # 서버 종료: Ctrl + C
@@ -507,29 +567,62 @@ celery -A config beat -l info
 
 ## 트러블슈팅
 
-### 1. `pip install` 에러
+### 1. `pip install` 에러 (Python 버전 문제)
 
-**증상:** `pip install -r requirements.txt` 실행 시 에러
+**증상:** `pip install -r requirements.txt` 실행 시 에러 (특히 패키지 호환성 에러)
+
+**원인:** Python 버전이 3.11.8이 아닌 경우 발생
 
 **해결:**
 ```bash
-# pip 업그레이드
+# 1. 먼저 Python 버전 확인
+python --version
+
+# 2. 3.11.8이 아니면 pyenv로 설치
+pyenv install 3.11.8
+
+# 3. 기존 가상환경 삭제
+rm -rf venv              # Mac/Linux
+rmdir /s /q venv         # Windows
+
+# 4. 새로운 가상환경 생성 (프로젝트 폴더에서)
+python3 -m venv venv     # Mac/Linux
+python -m venv venv      # Windows
+
+# 5. 가상환경 활성화
+source venv/bin/activate   # Mac/Linux
+venv\Scripts\activate      # Windows
+
+# 6. pip 업그레이드
 pip install --upgrade pip
 
-# 다시 시도
+# 7. 다시 시도
 pip install -r requirements.txt
 ```
 
-### 2. 가상환경이 활성화 안됨
+> **참고:** 프로젝트 루트에 `.python-version` 파일이 있어서 pyenv 사용 시 자동으로 3.11.8이 선택됩니다.
 
-**증상:** `source venv/bin/activate` 실행해도 (venv) 안보임
+### 2. 가상환경이 활성화 안됨 또는 Python 버전이 다름
+
+**증상:**
+- `source venv/bin/activate` 실행해도 (venv) 안보임
+- 가상환경 활성화 후 `python --version`이 3.11.8이 아님
 
 **해결:**
 ```bash
-# 가상환경 다시 만들기
+# 1. 먼저 시스템 Python 버전 확인
+python3 --version  # 반드시 3.11.8이어야 함
+
+# 2. 3.11.8이 아니면 pyenv로 설정
+pyenv local 3.11.8  # 현재 디렉토리에 적용
+
+# 3. 가상환경 다시 만들기
 rm -rf venv
 python3 -m venv venv
 source venv/bin/activate
+
+# 4. 가상환경 Python 버전 확인
+python --version  # Python 3.11.8 출력되어야 함
 ```
 
 ### 3. Docker 실행 안됨
