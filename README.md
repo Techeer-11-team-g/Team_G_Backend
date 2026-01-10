@@ -1,6 +1,6 @@
 # Team_G_Backend
 
-이미지 기반 상품 탐색 + 가상 피팅 + 원터치 구매 웹 서비스의 백엔드입니다.
+이미지 기반 상품 탐색 + 가상 피팅 + 원터치 구매 웹 서비스의 백엔드입니다. 안녕
 
 ## 서비스 흐름
 
@@ -38,40 +38,40 @@ LangChain으로 검색 품질 평가
 
 ### 이게 뭔지 모르겠다면?
 
-| 기술 | 한줄 설명 |
-|------|----------|
-| **Django** | Python으로 웹서버 만드는 프레임워크 (Spring 같은 것) |
-| **Django REST Framework** | Django에서 API 쉽게 만들게 해주는 도구 |
-| **Celery** | 오래 걸리는 작업을 백그라운드에서 처리 (예: 이미지 분석) |
-| **RabbitMQ** | Celery한테 "이 작업 해줘" 라고 전달하는 메신저 |
-| **Redis** | 빠른 임시 저장소 (분석 상태 저장용) |
-| **MySQL** | 메인 데이터베이스 (사용자, 상품, 분석결과 저장) |
-| **OpenSearch** | 벡터 검색용 (유사 상품 찾기) |
-| **LangChain** | OpenAI GPT를 쉽게 쓰게 해주는 도구 |
-| **Docker** | 모든 서비스를 패키징해서 어디서든 동일하게 실행 |
+| 기술                      | 한줄 설명                                                |
+| ------------------------- | -------------------------------------------------------- |
+| **Django**                | Python으로 웹서버 만드는 프레임워크 (Spring 같은 것)     |
+| **Django REST Framework** | Django에서 API 쉽게 만들게 해주는 도구                   |
+| **Celery**                | 오래 걸리는 작업을 백그라운드에서 처리 (예: 이미지 분석) |
+| **RabbitMQ**              | Celery한테 "이 작업 해줘" 라고 전달하는 메신저           |
+| **Redis**                 | 빠른 임시 저장소 (분석 상태 저장용)                      |
+| **MySQL**                 | 메인 데이터베이스 (사용자, 상품, 분석결과 저장)          |
+| **OpenSearch**            | 벡터 검색용 (유사 상품 찾기)                             |
+| **LangChain**             | OpenAI GPT를 쉽게 쓰게 해주는 도구                       |
+| **Docker**                | 모든 서비스를 패키징해서 어디서든 동일하게 실행          |
 
 ### 전체 기술 스택 표
 
-| 분류 | 기술 | 버전 | 용도 |
-|------|------|------|------|
-| **Backend** | Python | 3.11.8 (필수) | 프로그래밍 언어 |
-| | Django | 4.2.11 LTS | 웹 프레임워크 |
-| | Django REST Framework | 3.14.0 | REST API |
-| | Gunicorn | 21.2.0 | 운영 서버 |
-| **Task Queue** | Celery | 5.3.6 | 비동기 작업 처리 |
-| | RabbitMQ | 3.12 | 메시지 브로커 |
-| | Redis | 7.2 | 캐시 / 상태 저장 |
-| **Database** | MySQL | 8.0 | 메인 DB (Cloud SQL) |
-| | OpenSearch | 2.11.1 | 벡터 검색 (k-NN) |
-| **AI/ML** | LangChain | 0.1.16 | LLM 프레임워크 |
-| | OpenAI API | - | GPT, Embeddings |
-| | Google Vision API | - | 이미지 객체 탐지 |
-| | fashn.ai | - | 가상 피팅 |
-| **Infra** | Nginx | 1.24 | 리버스 프록시 |
-| | Docker | 24.x | 컨테이너화 |
-| **Monitoring** | Prometheus | 2.48 | 메트릭 수집 |
-| | Grafana | 10.2 | 대시보드 |
-| **Storage** | Google Cloud Storage | - | 이미지 저장 |
+| 분류           | 기술                  | 버전          | 용도                |
+| -------------- | --------------------- | ------------- | ------------------- |
+| **Backend**    | Python                | 3.11.8 (필수) | 프로그래밍 언어     |
+|                | Django                | 4.2.11 LTS    | 웹 프레임워크       |
+|                | Django REST Framework | 3.14.0        | REST API            |
+|                | Gunicorn              | 21.2.0        | 운영 서버           |
+| **Task Queue** | Celery                | 5.3.6         | 비동기 작업 처리    |
+|                | RabbitMQ              | 3.12          | 메시지 브로커       |
+|                | Redis                 | 7.2           | 캐시 / 상태 저장    |
+| **Database**   | MySQL                 | 8.0           | 메인 DB (Cloud SQL) |
+|                | OpenSearch            | 2.11.1        | 벡터 검색 (k-NN)    |
+| **AI/ML**      | LangChain             | 0.1.16        | LLM 프레임워크      |
+|                | OpenAI API            | -             | GPT, Embeddings     |
+|                | Google Vision API     | -             | 이미지 객체 탐지    |
+|                | fashn.ai              | -             | 가상 피팅           |
+| **Infra**      | Nginx                 | 1.24          | 리버스 프록시       |
+|                | Docker                | 24.x          | 컨테이너화          |
+| **Monitoring** | Prometheus            | 2.48          | 메트릭 수집         |
+|                | Grafana               | 10.2          | 대시보드            |
+| **Storage**    | Google Cloud Storage  | -             | 이미지 저장         |
 
 ---
 
@@ -228,6 +228,7 @@ docker-compose exec web python manage.py createsuperuser
 ```
 
 **접속 확인:**
+
 - Django: http://localhost:8000
 - Django Admin: http://localhost:8000/admin
 
@@ -361,17 +362,17 @@ DB_PORT=3306
 
 ### 전체 환경변수 목록
 
-| 변수 | 설명 | 필수 | 예시 |
-|------|------|------|------|
-| `SECRET_KEY` | Django 보안키 | O | 긴 랜덤 문자열 |
-| `DEBUG` | 디버그 모드 | X | True (개발), False (운영) |
-| `OPENAI_API_KEY` | OpenAI API 키 | O | sk-xxxx |
-| `FASHN_API_KEY` | fashn.ai API 키 | O | xxxx |
-| `GCS_BUCKET_NAME` | GCS 버킷명 | O | my-bucket |
-| `GOOGLE_APPLICATION_CREDENTIALS` | GCP 인증 파일 | O | /path/to/key.json |
-| `DB_PASSWORD` | MySQL 비밀번호 | O | - |
-| `REDIS_HOST` | Redis 호스트 | X | localhost |
-| `OPENSEARCH_HOST` | OpenSearch 호스트 | X | localhost |
+| 변수                             | 설명              | 필수 | 예시                      |
+| -------------------------------- | ----------------- | ---- | ------------------------- |
+| `SECRET_KEY`                     | Django 보안키     | O    | 긴 랜덤 문자열            |
+| `DEBUG`                          | 디버그 모드       | X    | True (개발), False (운영) |
+| `OPENAI_API_KEY`                 | OpenAI API 키     | O    | sk-xxxx                   |
+| `FASHN_API_KEY`                  | fashn.ai API 키   | O    | xxxx                      |
+| `GCS_BUCKET_NAME`                | GCS 버킷명        | O    | my-bucket                 |
+| `GOOGLE_APPLICATION_CREDENTIALS` | GCP 인증 파일     | O    | /path/to/key.json         |
+| `DB_PASSWORD`                    | MySQL 비밀번호    | O    | -                         |
+| `REDIS_HOST`                     | Redis 호스트      | X    | localhost                 |
+| `OPENSEARCH_HOST`                | OpenSearch 호스트 | X    | localhost                 |
 
 ---
 
@@ -574,6 +575,7 @@ celery -A config beat -l info
 **원인:** Python 버전이 3.11.8이 아닌 경우 발생
 
 **해결:**
+
 ```bash
 # 1. 먼저 Python 버전 확인
 python --version
@@ -605,10 +607,12 @@ pip install -r requirements.txt
 ### 2. 가상환경이 활성화 안됨 또는 Python 버전이 다름
 
 **증상:**
+
 - `source venv/bin/activate` 실행해도 (venv) 안보임
 - 가상환경 활성화 후 `python --version`이 3.11.8이 아님
 
 **해결:**
+
 ```bash
 # 1. 먼저 시스템 Python 버전 확인
 python3 --version  # 반드시 3.11.8이어야 함
@@ -630,6 +634,7 @@ python --version  # Python 3.11.8 출력되어야 함
 **증상:** `docker-compose up` 에러
 
 **해결:**
+
 1. Docker Desktop이 실행 중인지 확인
 2. 터미널 재시작
 3. `docker-compose down -v` 후 다시 `docker-compose up -d`
@@ -639,6 +644,7 @@ python --version  # Python 3.11.8 출력되어야 함
 **증상:** "port is already in use" 에러
 
 **해결:**
+
 ```bash
 # Mac/Linux: 해당 포트 사용 프로세스 찾기
 lsof -i :8000
@@ -652,6 +658,7 @@ kill -9 <PID>
 **증상:** `OPENAI_API_KEY not configured` 등의 경고
 
 **해결:**
+
 1. `.env` 파일이 프로젝트 루트에 있는지 확인
 2. 값에 따옴표 없이 입력했는지 확인
 3. 서버 재시작
@@ -661,6 +668,7 @@ kill -9 <PID>
 **증상:** "Can't connect to MySQL server"
 
 **해결 (Docker):**
+
 ```bash
 # MySQL 컨테이너 상태 확인
 docker-compose ps db
@@ -670,6 +678,7 @@ docker-compose restart db
 ```
 
 **해결 (로컬):**
+
 - MySQL 서버가 실행 중인지 확인
 - `.env`의 DB_HOST, DB_PORT 확인
 
@@ -677,17 +686,17 @@ docker-compose restart db
 
 ## 서비스 포트 정리
 
-| 서비스 | 포트 | 접속 URL |
-|--------|------|----------|
-| Django | 8000 | http://localhost:8000 |
-| Django Admin | 8000 | http://localhost:8000/admin |
-| MySQL | 3306 | - |
-| Redis | 6379 | - |
-| RabbitMQ | 5672 | - |
-| RabbitMQ 관리 | 15672 | http://localhost:15672 |
-| OpenSearch | 9200 | - |
-| Grafana | 3000 | http://localhost:3000 |
-| Prometheus | 9090 | http://localhost:9090 |
+| 서비스        | 포트  | 접속 URL                    |
+| ------------- | ----- | --------------------------- |
+| Django        | 8000  | http://localhost:8000       |
+| Django Admin  | 8000  | http://localhost:8000/admin |
+| MySQL         | 3306  | -                           |
+| Redis         | 6379  | -                           |
+| RabbitMQ      | 5672  | -                           |
+| RabbitMQ 관리 | 15672 | http://localhost:15672      |
+| OpenSearch    | 9200  | -                           |
+| Grafana       | 3000  | http://localhost:3000       |
+| Prometheus    | 9090  | http://localhost:9090       |
 
 ---
 
