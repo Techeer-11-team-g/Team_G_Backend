@@ -3,43 +3,44 @@ from django.conf import settings
 
 
 class UploadedImage(models.Model):
-    """
-    업로드된 이미지 테이블
-    API: POST /api/v1/uploaded-images
-    """
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='uploaded_images',
-        verbose_name='업로드한 사용자',
-    )
+      """
+      업로드된 이미지 테이블
+      ERD: uploaded_image
+      """
+      user = models.ForeignKey(
+          settings.AUTH_USER_MODEL,
+          on_delete=models.SET_NULL,
+          null=True,
+          blank=True,
+          related_name='uploaded_images',
+          db_column='user_id',
+          verbose_name='사용자 아이디',
+      )
 
-    image = models.ImageField(
-        upload_to='uploaded-images/%Y/%m/%d/',
-        verbose_name='이미지 파일',
-    )
+      # ImageField는 DB에 varchar로 URL 경로를 저장함
+      uploaded_image_url = models.ImageField(
+          upload_to='uploaded-images/%Y/%m/%d/',
+          verbose_name='업로드한 이미지 URL',
+      )
 
-    original_filename = models.CharField(
-        max_length=255,
-        blank=True,
-        verbose_name='원본 파일명',
-    )
+      created_at = models.DateTimeField(
+          auto_now_add=True,
+          verbose_name='생성 일자',
+      )
 
-    file_size = models.PositiveIntegerField(
-        default=0,
-        verbose_name='파일 크기(bytes)',
-    )
+      updated_at = models.DateTimeField(
+          auto_now=True,
+          verbose_name='수정 일자',
+      )
 
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name='업로드 일시',
-    )
+      is_deleted = models.BooleanField(
+          default=False,
+          verbose_name='삭제 여부',
+      )
 
-    class Meta:
-        db_table = 'uploaded_image'
-        ordering = ['-created_at']
+      class Meta:
+          db_table = 'uploaded_image'
+          ordering = ['-created_at']
 
-    def __str__(self):
-        return f"UploadedImage #{self.pk}"
+      def __str__(self):
+          return f"UploadedImage #{self.pk}"
