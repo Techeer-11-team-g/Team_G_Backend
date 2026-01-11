@@ -24,6 +24,7 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 # Application definition
 
 INSTALLED_APPS = [
+    'analyses.apps.AnalysesConfig',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -36,7 +37,6 @@ INSTALLED_APPS = [
     'storages',
     'corsheaders',
     # Local apps
-    'analyses',
 ]
 
 MIDDLEWARE = [
