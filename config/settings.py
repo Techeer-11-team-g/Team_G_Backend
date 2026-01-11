@@ -24,7 +24,6 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 # Application definition
 
 INSTALLED_APPS = [
-    'analyses.apps.AnalysesConfig',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -37,7 +36,15 @@ INSTALLED_APPS = [
     'storages',
     'corsheaders',
     # Local apps
+    'users.apps.UsersConfig',
+    'products.apps.ProductsConfig',
+    'analyses.apps.AnalysesConfig',
+    'fittings.apps.FittingsConfig',
+    'orders.apps.OrdersConfig',
 ]
+
+# Custom User Model
+AUTH_USER_MODEL = 'users.User'
 
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
