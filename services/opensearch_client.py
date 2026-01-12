@@ -61,7 +61,7 @@ class OpenSearchService:
                 'product_id': {'type': 'keyword'},
                 'embedding': {
                     'type': 'knn_vector',
-                    'dimension': 1536,  # OpenAI text-embedding-3-small
+                    'dimension': 512,  # CLIP clip-vit-base-patch32
                     'method': {
                         'name': 'hnsw',
                         'space_type': 'cosinesimil',
@@ -253,6 +253,8 @@ class OpenSearchService:
                 'score': hit['_score'],
                 'category': hit['_source'].get('category'),
                 'brand': hit['_source'].get('brand'),
+                'name': hit['_source'].get('name'),
+                'image_url': hit['_source'].get('image_url'),
             })
 
         return results
