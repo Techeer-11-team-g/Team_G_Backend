@@ -1,15 +1,24 @@
+import logging
+
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from .models import UploadedImage
+from .models import UploadedImage, ImageAnalysis
 from .serializers import (
     UploadedImageCreateSerializer,
     UploadedImageResponseSerializer,
     UploadedImageListSerializer,
+    ImageAnalysisCreateSerializer,
+    ImageAnalysisResponseSerializer,
+    ImageAnalysisStatusSerializer,
 )
+from .tasks import process_image_analysis
+from services import get_redis_service
+
+logger = logging.getLogger(__name__)
 
 
 class UploadedImageView(APIView):
@@ -84,3 +93,93 @@ class UploadedImageView(APIView):
             'items': serializer.data,
             'next_cursor': next_cursor
         })
+
+
+class ImageAnalysisView(APIView):
+    """
+    이미지 분석 API
+
+    POST /api/v1/analyses - 이미지 분석 시작
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        이미지 분석 시작
+
+        Request Body: { uploaded_image_id: int, uploaded_image_url: string }
+        Response 201: { analysis_id, status, polling: { status_url, result_url } }
+        """
+        serializer = ImageAnalysisCreateSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                {'error': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # ImageAnalysis 레코드 생성
+        analysis = serializer.save()
+
+        # 이미지 URL 가져오기
+        uploaded_image = analysis.uploaded_image
+        image_url = request.data.get('uploaded_image_url')
+        if not image_url and uploaded_image.uploaded_image_url:
+            image_url = uploaded_image.uploaded_image_url.url
+
+        # Celery task 트리거
+        try:
+            process_image_analysis.delay(
+                analysis_id=str(analysis.id),
+                image_url=image_url,
+                user_id=request.user.id if request.user.is_authenticated else None,
+            )
+            logger.info(f"Analysis task triggered: {analysis.id}")
+        except Exception as e:
+            logger.error(f"Failed to trigger analysis task: {e}")
+            # 실패해도 일단 응답은 반환 (상태는 PENDING으로 유지)
+
+        response_serializer = ImageAnalysisResponseSerializer(analysis)
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED
+        )
+
+class ImageAnalysisStatusView(APIView):
+    """
+    이미지 분석 상태 조회 API
+
+    GET /api/v1/analyses/{analysis_id}/status
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, analysis_id):
+        """
+        이미지 분석 상태 조회
+
+        Response 200: { analysis_id, status, progress, updated_at }
+        """
+        # DB에서 분석 정보 조회
+        try:
+            analysis = ImageAnalysis.objects.get(id=analysis_id, is_deleted=False)
+        except ImageAnalysis.DoesNotExist:
+            return Response(
+                {'error': '존재하지 않는 분석입니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Redis에서 실시간 진행률 조회
+        redis_service = get_redis_service()
+        progress = redis_service.get_analysis_progress(str(analysis_id))
+
+        # Redis에서 상태도 조회 (더 최신일 수 있음)
+        redis_status = redis_service.get_analysis_status(str(analysis_id))
+        if redis_status:
+            analysis.image_analysis_status = redis_status
+
+        # Serializer에 progress 추가하여 응답
+        serializer = ImageAnalysisStatusSerializer(analysis)
+        data = serializer.data
+        data['progress'] = progress
+
+        return Response(data)
