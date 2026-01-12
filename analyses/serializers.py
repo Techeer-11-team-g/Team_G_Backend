@@ -1,12 +1,13 @@
 from rest_framework import serializers
-from .models import UploadedImage
+from .models import UploadedImage, ImageAnalysis
 
 
 class UploadedImageCreateSerializer(serializers.ModelSerializer):
     """
-    이미지 업로드 요청용
-    POST /api/v1/uploaded-images
+    이미지 업로드 요청을 처리하는 Serializer
+    클라이언트가 POST /api/v1/uploaded-images 요청 시 사용
     """
+    # 전송된 파일을 받기 위한 필드 (응답에는 포함되지 않도록 write_only=True 설정)
     file = serializers.ImageField(write_only=True)
 
     class Meta:
@@ -14,10 +15,14 @@ class UploadedImageCreateSerializer(serializers.ModelSerializer):
         fields = ['file']
 
     def validate_file(self, value):
-        """파일 검증"""
+        """
+        업로드된 이미지 파일에 대한 유효성 검사
+        """
+        # 파일 크기 제한: 10MB
         if value.size > 10 * 1024 * 1024:
             raise serializers.ValidationError('파일 크기는 10MB 이하여야 합니다.')
 
+        # 허용된 파일 형식 검사
         allowed_types = ['image/jpeg', 'image/png', 'image/webp']
         if value.content_type not in allowed_types:
             raise serializers.ValidationError('JPG, PNG, WEBP 파일만 업로드 가능합니다.')
@@ -25,28 +30,36 @@ class UploadedImageCreateSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        """이미지 저장"""
+        """
+        업로드된 이미지의 메타데이터를 DB에 저장
+        """
         file = validated_data['file']
         request = self.context.get('request')
 
+        # 요청한 사용자가 인증되어 있으면 사용자 정보 연결
         user = None
         if request and request.user.is_authenticated:
             user = request.user
 
+        # UploadedImage 객체 생성 및 저장
         uploaded_image = UploadedImage.objects.create(
             user=user,
-            uploaded_image_url=file,  # 필드명 변경됨
+            uploaded_image_url=file,  # 이미지 필드에 파일 객체 할당 (S3 등에 자동 업로드됨)
         )
         return uploaded_image
 
 
 class UploadedImageResponseSerializer(serializers.ModelSerializer):
     """
-    이미지 업로드 응답용
-    Response: { uploaded_image_id, uploaded_image_url, created_at }
+    이미지 업로드 후 성공 응답을 반환하는 Serializer
     """
+    # DB의 id 필드를 응답 시 uploaded_image_id로 이름 변경
     uploaded_image_id = serializers.IntegerField(source='id')
+    
+    # 모델 필드 대신 별도의 로직으로 URL을 가져오기 위한 필드
     uploaded_image_url = serializers.SerializerMethodField()
+    
+    # 생성일자를 특정 ISO 포맷으로 고정
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%SZ')
 
     class Meta:
@@ -54,6 +67,9 @@ class UploadedImageResponseSerializer(serializers.ModelSerializer):
         fields = ['uploaded_image_id', 'uploaded_image_url', 'created_at']
 
     def get_uploaded_image_url(self, obj):
+        """
+        이미지 파일의 절대 경로(URL)를 반환
+        """
         if obj.uploaded_image_url:
             return obj.uploaded_image_url.url
         return ''
@@ -61,8 +77,8 @@ class UploadedImageResponseSerializer(serializers.ModelSerializer):
 
 class UploadedImageListSerializer(serializers.ModelSerializer):
     """
-    이미지 목록 조회용
-    GET /api/v1/uploaded-images
+    업로드된 이미지 목록을 조회할 때 사용하는 Serializer
+    (현재 구조는 ResponseSerializer와 동일함)
     """
     uploaded_image_id = serializers.IntegerField(source='id')
     uploaded_image_url = serializers.SerializerMethodField()
@@ -73,6 +89,9 @@ class UploadedImageListSerializer(serializers.ModelSerializer):
         fields = ['uploaded_image_id', 'uploaded_image_url', 'created_at']
 
     def get_uploaded_image_url(self, obj):
+        """
+        이미지 파일의 절대 경로(URL)를 반환
+        """
         if obj.uploaded_image_url:
             return obj.uploaded_image_url.url
         return ''
