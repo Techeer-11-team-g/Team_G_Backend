@@ -18,7 +18,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health_check'),
     path('', include('django_prometheus.urls')),  # /metrics endpoint
-    path('api/v1/users/', include('users.urls')),
-    path('', include('analyses.urls')),
+    path('api/v1/', include('users.urls')),
+    path('api/v1/', include('orders.urls')),
+    path('api/v1/', include('analyses.urls')),
     path('api/v1/', include('fittings.urls')),
+    path('', include('analyses.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
