@@ -5,14 +5,14 @@ from .models import Order, OrderItem, CartItem
 class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
-        fields = ['id', 'order_status', 'total_price', 'delivery_address', 'created_at']
-        read_only_fields = ['id', 'order_status', 'total_price', 'delivery_address', 'created_at']
+        fields = ['id', 'total_price', 'delivery_address', 'created_at']
+        read_only_fields = ['id', 'total_price', 'delivery_address', 'created_at']
     
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         # Rename 'id' to 'order_id' as per requirement(아이디를 오더 아이디로 변경)
         ret['order_id'] = ret.pop('id')
-        return ret
+        return ret 
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
@@ -25,8 +25,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Order
-        fields = ['cart_item_ids', 'user_id', 'id', 'order_status', 'total_price', 'delivery_address', 'payment_method', 'created_at']
-        read_only_fields = ['id', 'order_status', 'total_price', 'delivery_address', 'created_at']
+        fields = ['cart_item_ids', 'user_id', 'id', 'total_price', 'delivery_address', 'payment_method', 'created_at']
+        read_only_fields = ['id', 'total_price', 'delivery_address', 'created_at']
 
     def validate_cart_item_ids(self, value):
         user = self.context['request'].user
@@ -75,8 +75,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
                 total_price=total_price,
                 delivery_address=delivery_address,
                 payment_method=payment_method,
-                order_status=Order.OrderStatus.PAID # 주문 생성 시 결제 완료로 가정
-            )
+            ) 
 
             # 주문 항목 생성
             order_items = []
@@ -86,8 +85,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
                     product_item=item.selected_product,
                     purchased_quantity=item.quantity,
                     price_at_order=item.selected_product.product.selling_price,
-                    order_status=OrderItem.OrderStatus.PAID
-                ))
+                    order_status=Order.OrderStatus.PAID 
+                )) 
             OrderItem.objects.bulk_create(order_items)
 
             # 장바구니 항목 삭제 (Soft Delete)

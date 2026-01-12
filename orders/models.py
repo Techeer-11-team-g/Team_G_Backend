@@ -13,7 +13,7 @@ class CartItem(models.Model):
         on_delete=models.CASCADE,
         related_name='cart_items',
         db_column='user_id',
-        verbose_name='사용자',
+        verbose_name='사용자', 
     )
 
     selected_product = models.ForeignKey(
@@ -59,15 +59,7 @@ class Order(models.Model):
     ERD: order
     주문 기본 정보
     """
-    class OrderStatus(models.TextChoices):
-        PENDING = 'PENDING', '결제 대기'
-        PAID = 'PAID', '결제 완료'
-        PREPARING = 'PREPARING', '배송 준비 중'
-        SHIPPING = 'SHIPPING', '배송 중'
-        DELIVERED = 'DELIVERED', '배송 완료'
-        CANCELLED = 'CANCELLED', '주문 취소'
-        REFUNDED = 'REFUNDED', '환불 완료'
-
+    
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -75,14 +67,7 @@ class Order(models.Model):
         related_name='orders',
         db_column='user_id',
         verbose_name='사용자',
-    )
-
-    order_status = models.CharField(
-        max_length=20,
-        choices=OrderStatus.choices,
-        default=OrderStatus.PENDING,
-        verbose_name='주문 상태',
-    )
+    ) 
 
     total_price = models.PositiveIntegerField(
         default=0,
