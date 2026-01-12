@@ -12,7 +12,7 @@ class OrderSerializer(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         # Rename 'id' to 'order_id' as per requirement(아이디를 오더 아이디로 변경)
         ret['order_id'] = ret.pop('id')
-        return ret 
+        return ret  
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
@@ -48,8 +48,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         cart_item_ids = validated_data.pop('cart_item_ids')
-        user_id = validated_data.pop('user_id') # validated but not used for creation as we use request.user
-        payment_method = validated_data.get('payment_method', 'card')
+        user_id = validated_data.pop('user_id') # validated but not used for creation as we use request.user 
         
         user = self.context['request'].user
         
@@ -73,8 +72,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             order = Order.objects.create(
                 user=user,
                 total_price=total_price,
-                delivery_address=delivery_address,
-                payment_method=payment_method,
+                delivery_address=delivery_address, 
             ) 
 
             # 주문 항목 생성

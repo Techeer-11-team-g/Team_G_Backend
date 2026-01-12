@@ -76,13 +76,7 @@ class Order(models.Model):
 
     delivery_address = models.TextField(
         verbose_name='배송 주소',
-    )
-
-    payment_method = models.CharField(
-        max_length=50,
-        default='card',
-        verbose_name='결제 수단',
-    )
+    ) 
 
     created_at = models.DateTimeField(
         auto_now_add=True,
