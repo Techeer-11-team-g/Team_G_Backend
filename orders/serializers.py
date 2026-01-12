@@ -5,8 +5,8 @@ from .models import Order, OrderItem, CartItem
 class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
-        fields = ['id', 'total_price', 'delivery_address', 'created_at']
-        read_only_fields = ['id', 'total_price', 'delivery_address', 'created_at']
+        fields = ['id', 'order_status', 'total_price', 'delivery_address', 'created_at']
+        read_only_fields = ['id', 'order_status', 'total_price', 'delivery_address', 'created_at']
     
     def to_representation(self, instance):
         ret = super().to_representation(instance)
@@ -25,8 +25,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Order
-        fields = ['cart_item_ids', 'user_id', 'id', 'total_price', 'delivery_address', 'payment_method', 'created_at']
-        read_only_fields = ['id', 'total_price', 'delivery_address', 'created_at']
+        fields = ['cart_item_ids', 'user_id', 'id', 'order_status', 'total_price', 'delivery_address', 'payment_method', 'created_at']
+        read_only_fields = ['id', 'order_status', 'total_price', 'delivery_address', 'created_at']
 
     def validate_cart_item_ids(self, value):
         user = self.context['request'].user
@@ -75,6 +75,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
                 total_price=total_price,
                 delivery_address=delivery_address,
                 payment_method=payment_method,
+                order_status=Order.OrderStatus.PAID # 주문 생성 시 결제 완료로 가정
             )
 
             # 주문 항목 생성
