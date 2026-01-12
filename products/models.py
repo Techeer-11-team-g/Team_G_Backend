@@ -135,4 +135,4 @@ class Product(models.Model):
         verbose_name_plural = '상품 목록'
 
     def __str__(self):
-        return f"[{self.brand_name}] {self.product_name}"
+        return f"[{self.brand_name}] {self.product_name}" 

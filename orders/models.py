@@ -77,6 +77,12 @@ class Order(models.Model):
         verbose_name='배송 주소',
     )
 
+    payment_method = models.CharField(
+        max_length=50,
+        default='card',
+        verbose_name='결제 수단',
+    )
+
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name='생성 일자',
@@ -178,4 +184,4 @@ class OrderItem(models.Model):
     @property
     def subtotal(self):
         """해당 주문 항목의 소계"""
-        return self.price_at_order * self.purchased_quantity
+        return self.price_at_order * self.purchased_quantity 
