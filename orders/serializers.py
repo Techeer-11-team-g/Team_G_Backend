@@ -25,7 +25,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Order
-        fields = ['cart_item_ids', 'user_id', 'id', 'total_price', 'delivery_address', 'payment_method', 'created_at']
+        fields = ['cart_item_ids', 'user_id', 'id', 'total_price', 'delivery_address', 'created_at']
         read_only_fields = ['id', 'total_price', 'delivery_address', 'created_at']
 
     def validate_cart_item_ids(self, value):
