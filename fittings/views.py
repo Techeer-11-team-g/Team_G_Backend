@@ -19,7 +19,7 @@ class FittingRequestView(APIView):
             product_id=product_id,
             # user_image_id는 명세서상 user_image_url을 받아 처리하므로 
             # 프로젝트 로직에 따라 URL 저장 혹은 ID 매핑 필요
-            fitting_image_status='PENDING'
+            fitting_image_status=FittingImage.Status.PENDING
         )
 
         # 2. Celery 비동기 작업 시작
@@ -44,8 +44,8 @@ class FittingStatusView(APIView):
         
         # 명세서 반영: status, progress, updated_at
         return Response({
-            "status": "RUNNING" if fitting.fitting_image_status == 'processing' else fitting.fitting_image_status.upper(),
-            "progress": 40 if fitting.fitting_image_status == 'processing' else 100, # 예시 데이터
+            "status": "RUNNING" if fitting.fitting_image_status == FittingImage.Status.RUNNING else fitting.fitting_image_status.upper(),
+            "progress": 40 if fitting.fitting_image_status == FittingImage.Status.RUNNING else 100, # 예시 데이터
             "updated_at": fitting.updated_at.isoformat()
         }, status=status.HTTP_200_OK)
 
@@ -59,7 +59,7 @@ class FittingResultView(APIView):
         # 명세서 반영: fitting_image_id, status, fitting_image_url, completed_at
         return Response({
             "fitting_image_id": fitting.id,
-            "status": "DONE" if fitting.fitting_image_status == 'completed' else fitting.fitting_image_status.upper(),
+            "status": "DONE" if fitting.fitting_image_status == FittingImage.Status.DONE else fitting.fitting_image_status.upper(),
             "fitting_image_url": fitting.fitting_image_url,
-            "completed_at": fitting.updated_at.isoformat() if fitting.fitting_image_status == 'completed' else None
+            "completed_at": fitting.updated_at.isoformat() if fitting.fitting_image_status == FittingImage.Status.DONE else None
         }, status=status.HTTP_200_OK)
