@@ -1,6 +1,7 @@
 from django.urls import path
-from .views import UserOnboardingView
+from .views import UserOnboardingView, UserMeView
 
 urlpatterns = [
-    path("/onboarding", UserOnboardingView.as_view()),
+    path("me", UserMeView.as_view()),
+    path("onboarding", UserOnboardingView.as_view()),
 ]

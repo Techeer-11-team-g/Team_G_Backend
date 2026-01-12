@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from .serializers import UserOnboardingSerializer
+from .serializers import UserOnboardingSerializer, UserProfileSerializer
 
 
 class UserOnboardingView(APIView):
@@ -23,3 +23,12 @@ class UserOnboardingView(APIView):
                 {"message": "사용자 필수 정보(온보딩)가 성공적으로 저장되었습니다."},
                 status=status.HTTP_200_OK
             )
+
+class UserMeView(APIView):
+    # 로그인한 사용자만 접근 가능하도록 설정
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        """현재 로그인한 본인의 정보 조회"""
+        # request.user에는 현재 로그인된 사용자의 객체가 담겨 있습니다.
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
