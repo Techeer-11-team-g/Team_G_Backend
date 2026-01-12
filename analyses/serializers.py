@@ -155,3 +155,19 @@ class ImageAnalysisResponseSerializer(serializers.ModelSerializer):
             'status_url': f'/api/v1/analyses/{obj.id}/status', # 실시간 상태 확인용
             'result_url': f'/api/v1/analyses/{obj.id}',        # 분석 완료 후 최종 결과용
         }
+
+
+class ImageAnalysisStatusSerializer(serializers.ModelSerializer):
+    """
+    이미지 분석 상태 조회 응답용 Serializer
+    GET /api/v1/analyses/{analysis_id}/status
+    Redis에서 실시간 진행률을 가져와 함께 반환
+    """
+    analysis_id = serializers.IntegerField(source='id')
+    status = serializers.CharField(source='image_analysis_status')
+    progress = serializers.IntegerField(default=0)
+    updated_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%SZ')
+
+    class Meta:
+        model = ImageAnalysis
+        fields = ['analysis_id', 'status', 'progress', 'updated_at']

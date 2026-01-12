@@ -52,7 +52,7 @@ class FashnService:
     def create_fitting(
         self,
         model_image_url: str,
-        garment_image_url: str,
+        product_image_url: str,
         category: str = 'tops',
     ) -> FittingResult:
         """
@@ -60,7 +60,7 @@ class FashnService:
 
         Args:
             model_image_url: URL of the model/person image
-            garment_image_url: URL of the garment image
+            product_image_url: URL of the garment image
             category: Garment category (tops, bottoms, one-pieces)
 
         Returns:
@@ -70,7 +70,7 @@ class FashnService:
 
         payload = {
             'model_image': model_image_url,
-            'garment_image': garment_image_url,
+            'garment_image': product_image_url,
             'category': category,
         }
 
