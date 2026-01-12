@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import UploadedImage, ImageAnalysis
+from .models import UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping
+from products.models import Product
 
 
 class UploadedImageCreateSerializer(serializers.ModelSerializer):
@@ -171,3 +172,102 @@ class ImageAnalysisStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = ImageAnalysis
         fields = ['analysis_id', 'status', 'progress', 'updated_at']
+
+
+# =============================================================================
+# 이미지 분석 결과 조회용 Serializers
+# GET /api/v1/analyses/{analysis_id}
+# =============================================================================
+
+class ProductSerializer(serializers.ModelSerializer):
+    """
+    상품 정보 Serializer
+    분석 결과에서 매칭된 상품 정보를 표시
+    """
+    image_url = serializers.CharField(source='product_image_url')
+
+    class Meta:
+        model = Product
+        fields = ['id', 'brand_name', 'product_name', 'selling_price', 'image_url', 'product_url']
+
+
+class MatchSerializer(serializers.ModelSerializer):
+    """
+    검출 객체-상품 매핑 Serializer
+    OpenSearch k-NN 검색으로 찾은 유사 상품 정보
+    """
+    product_id = serializers.IntegerField(source='product.id')
+    product = ProductSerializer()
+
+    class Meta:
+        model = ObjectProductMapping
+        fields = ['product_id', 'product']
+
+
+class DetectedObjectResultSerializer(serializers.ModelSerializer):
+    """
+    검출된 객체 결과 Serializer
+    bbox, 카테고리, 신뢰도, 매칭된 상품 정보 포함
+    """
+    detected_object_id = serializers.IntegerField(source='id')
+    category_name = serializers.CharField(source='object_category')
+    confidence_score = serializers.FloatField(source='confidence')
+    bbox = serializers.SerializerMethodField()
+    match = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DetectedObject
+        fields = ['detected_object_id', 'category_name', 'confidence_score', 'bbox', 'match']
+
+    def get_bbox(self, obj):
+        """Bounding box 좌표 반환"""
+        return {
+            'x1': round(obj.bbox_x1, 2),
+            'x2': round(obj.bbox_x2, 2),
+            'y1': round(obj.bbox_y1, 2),
+            'y2': round(obj.bbox_y2, 2),
+        }
+
+    def get_match(self, obj):
+        """가장 높은 신뢰도의 매칭 상품 반환"""
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if mapping:
+            return MatchSerializer(mapping).data
+        return None
+
+
+class UploadedImageInfoSerializer(serializers.ModelSerializer):
+    """
+    업로드된 이미지 정보 (결과 조회용)
+    """
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UploadedImage
+        fields = ['id', 'url']
+
+    def get_url(self, obj):
+        if obj.uploaded_image_url:
+            return obj.uploaded_image_url.url
+        return ''
+
+
+class ImageAnalysisResultSerializer(serializers.ModelSerializer):
+    """
+    이미지 분석 결과 조회 응답용 Serializer
+    GET /api/v1/analyses/{analysis_id}
+    분석 완료 후 검출된 객체들과 매칭된 상품 정보를 반환
+    """
+    analysis_id = serializers.IntegerField(source='id')
+    uploaded_image = UploadedImageInfoSerializer()
+    status = serializers.CharField(source='image_analysis_status')
+    items = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImageAnalysis
+        fields = ['analysis_id', 'uploaded_image', 'status', 'items']
+
+    def get_items(self, obj):
+        """분석된 이미지의 검출된 객체 목록 반환"""
+        detected_objects = obj.uploaded_image.detected_objects.filter(is_deleted=False)
+        return DetectedObjectResultSerializer(detected_objects, many=True).data

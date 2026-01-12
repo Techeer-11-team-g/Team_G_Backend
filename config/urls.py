@@ -20,4 +20,5 @@ urlpatterns = [
     path('', include('django_prometheus.urls')),  # /metrics endpoint
     path('api/users/', include('users.urls')),
     path('', include('analyses.urls')),
+    path('api/v1/', include('fittings.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
