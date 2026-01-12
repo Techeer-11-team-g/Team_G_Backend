@@ -12,7 +12,7 @@ class OrderSerializer(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         # Rename 'id' to 'order_id' as per requirement(아이디를 오더 아이디로 변경)
         ret['order_id'] = ret.pop('id')
-        return ret  
+        return ret 
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
