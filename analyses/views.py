@@ -13,8 +13,10 @@ from .serializers import (
     UploadedImageListSerializer,
     ImageAnalysisCreateSerializer,
     ImageAnalysisResponseSerializer,
+    ImageAnalysisStatusSerializer,
 )
 from .tasks import process_image_analysis
+from services import get_redis_service
 
 logger = logging.getLogger(__name__)
 
@@ -142,3 +144,42 @@ class ImageAnalysisView(APIView):
             response_serializer.data,
             status=status.HTTP_201_CREATED
         )
+
+class ImageAnalysisStatusView(APIView):
+    """
+    이미지 분석 상태 조회 API
+
+    GET /api/v1/analyses/{analysis_id}/status
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, analysis_id):
+        """
+        이미지 분석 상태 조회
+
+        Response 200: { analysis_id, status, progress, updated_at }
+        """
+        # DB에서 분석 정보 조회
+        try:
+            analysis = ImageAnalysis.objects.get(id=analysis_id, is_deleted=False)
+        except ImageAnalysis.DoesNotExist:
+            return Response(
+                {'error': '존재하지 않는 분석입니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Redis에서 실시간 진행률 조회
+        redis_service = get_redis_service()
+        progress = redis_service.get_analysis_progress(str(analysis_id))
+
+        # Redis에서 상태도 조회 (더 최신일 수 있음)
+        redis_status = redis_service.get_analysis_status(str(analysis_id))
+        if redis_status:
+            analysis.image_analysis_status = redis_status
+
+        # Serializer에 progress 추가하여 응답
+        serializer = ImageAnalysisStatusSerializer(analysis)
+        data = serializer.data
+        data['progress'] = progress
+
+        return Response(data)
