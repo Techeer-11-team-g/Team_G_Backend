@@ -113,3 +113,15 @@ def example_consumer():
     with RabbitMQClient() as client:
         print("Waiting for messages...")
         client.consume('notifications', callback)
+
+
+# Singleton instance
+_rabbitmq_client = None
+
+
+def get_rabbitmq_client() -> RabbitMQClient:
+    """Get or create RabbitMQClient singleton."""
+    global _rabbitmq_client
+    if _rabbitmq_client is None:
+        _rabbitmq_client = RabbitMQClient()
+    return _rabbitmq_client
