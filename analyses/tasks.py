@@ -137,7 +137,8 @@ def process_detected_item_task(
 
 
 def _download_image(image_url: str) -> bytes:
-    """Download image from GCS URL."""
+    """Download image from URL or local file path."""
+    import os
     from google.cloud import storage
 
     # Parse GCS URL: gs://bucket/path/to/file
@@ -151,12 +152,21 @@ def _download_image(image_url: str) -> bytes:
         blob = bucket.blob(blob_name)
 
         return blob.download_as_bytes()
-    else:
+    elif image_url.startswith('/media/'):
+        # Local media file - read directly from filesystem
+        local_path = settings.BASE_DIR / image_url.lstrip('/')
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(f"Local file not found: {local_path}")
+        with open(local_path, 'rb') as f:
+            return f.read()
+    elif image_url.startswith('http://') or image_url.startswith('https://'):
         # HTTP URL - use requests
         import requests
         response = requests.get(image_url, timeout=30)
         response.raise_for_status()
         return response.content
+    else:
+        raise ValueError(f"Unsupported URL format: {image_url}")
 
 
 def _detect_objects(image_bytes: bytes) -> list[DetectedItem]:

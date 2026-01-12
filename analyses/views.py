@@ -14,6 +14,7 @@ from .serializers import (
     ImageAnalysisCreateSerializer,
     ImageAnalysisResponseSerializer,
     ImageAnalysisStatusSerializer,
+    ImageAnalysisResultSerializer,
 )
 from .tasks import process_image_analysis
 from services import get_redis_service
@@ -183,3 +184,40 @@ class ImageAnalysisStatusView(APIView):
         data['progress'] = progress
 
         return Response(data)
+
+
+class ImageAnalysisResultView(APIView):
+    """
+    이미지 분석 결과 조회 API
+
+    GET /api/v1/analyses/{analysis_id}
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, analysis_id):
+        """
+        이미지 분석 결과 조회
+
+        Response 200: {
+            analysis_id, uploaded_image, status, items: [
+                { detected_object_id, category_name, confidence_score, bbox, match }
+            ]
+        }
+        """
+        # DB에서 분석 정보 조회 (관련 데이터 prefetch)
+        try:
+            analysis = ImageAnalysis.objects.select_related(
+                'uploaded_image'
+            ).prefetch_related(
+                'uploaded_image__detected_objects',
+                'uploaded_image__detected_objects__product_mappings',
+                'uploaded_image__detected_objects__product_mappings__product',
+            ).get(id=analysis_id, is_deleted=False)
+        except ImageAnalysis.DoesNotExist:
+            return Response(
+                {'error': '존재하지 않는 분석입니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = ImageAnalysisResultSerializer(analysis)
+        return Response(serializer.data)
