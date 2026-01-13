@@ -51,6 +51,8 @@ celerybeat.pid
 *-credentials.json
 *-service-account.json
 gcs-*.json
+credentials/
+*.json
 
 # Docker (선택 - 로컬 볼륨 데이터)
 # docker-compose.override.yml
@@ -68,4 +70,8 @@ htmlcov/
 
 # Google Cloud
 keys/
+*.json
+
+# Credentials
+credentials/
 *.json

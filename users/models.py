@@ -41,6 +41,13 @@ class User(AbstractUser):
         verbose_name='프로필 이미지 URL',
     )
 
+    payment = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name='결제 정보',
+    )
+
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name='생성 일자',

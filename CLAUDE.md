@@ -52,6 +52,13 @@ python manage.py collectstatic --noinput
 python manage.py createsuperuser
 ```
 
+### Testing
+```bash
+python manage.py test                    # Run all tests
+python manage.py test analyses           # Run tests for specific app
+python manage.py test analyses.tests.TestAnalysisAPI  # Run specific test class
+```
+
 ## Architecture
 
 ### Core Flow
@@ -115,6 +122,8 @@ from services import OpenSearchService, LangChainService
 
 **`fittings/tasks.py`:**
 - `process_fitting_task` - Alternative fitting task that updates DB directly
+
+Task configuration: `@shared_task(bind=True, max_retries=3, default_retry_delay=60)`
 
 ### Configuration
 

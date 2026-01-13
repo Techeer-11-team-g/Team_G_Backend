@@ -83,6 +83,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database - MySQL
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
+# MySQL Database
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -96,6 +97,14 @@ DATABASES = {
         },
     }
 }
+
+# Local Development (SQLite)
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
 
 # PyMySQL as MySQL client
 import pymysql
@@ -228,13 +237,13 @@ GCS_PROJECT_ID = os.getenv('GCS_PROJECT_ID', '')
 GCS_CREDENTIALS_FILE = os.getenv('GCS_CREDENTIALS_FILE', '')
 
 # Use GCS for media files if configured
-if GCS_BUCKET_NAME:
+if GCS_BUCKET_NAME and GCS_CREDENTIALS_FILE and os.path.exists(GCS_CREDENTIALS_FILE):
+    from google.oauth2 import service_account
     DEFAULT_FILE_STORAGE = 'storages.backends.gcloud.GoogleCloudStorage'
     GS_BUCKET_NAME = GCS_BUCKET_NAME
     GS_PROJECT_ID = GCS_PROJECT_ID
-    if GCS_CREDENTIALS_FILE:
-        GS_CREDENTIALS = GCS_CREDENTIALS_FILE
-    GS_DEFAULT_ACL = 'publicRead'
+    GS_CREDENTIALS = service_account.Credentials.from_service_account_file(GCS_CREDENTIALS_FILE)
+    GS_DEFAULT_ACL = None  # uniform bucket-level access 사용시 ACL 비활성화
     GS_QUERYSTRING_AUTH = False
 
 MEDIA_URL = os.getenv('MEDIA_URL', '/media/')

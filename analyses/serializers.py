@@ -1,12 +1,14 @@
 from rest_framework import serializers
-from .models import UploadedImage, ImageAnalysis
+from .models import UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping
+from products.models import Product
 
 
 class UploadedImageCreateSerializer(serializers.ModelSerializer):
     """
-    이미지 업로드 요청용
-    POST /api/v1/uploaded-images
+    이미지 업로드 요청을 처리하는 Serializer
+    클라이언트가 POST /api/v1/uploaded-images 요청 시 사용
     """
+    # 전송된 파일을 받기 위한 필드 (응답에는 포함되지 않도록 write_only=True 설정)
     file = serializers.ImageField(write_only=True)
 
     class Meta:
@@ -14,10 +16,14 @@ class UploadedImageCreateSerializer(serializers.ModelSerializer):
         fields = ['file']
 
     def validate_file(self, value):
-        """파일 검증"""
+        """
+        업로드된 이미지 파일에 대한 유효성 검사
+        """
+        # 파일 크기 제한: 10MB
         if value.size > 10 * 1024 * 1024:
             raise serializers.ValidationError('파일 크기는 10MB 이하여야 합니다.')
 
+        # 허용된 파일 형식 검사
         allowed_types = ['image/jpeg', 'image/png', 'image/webp']
         if value.content_type not in allowed_types:
             raise serializers.ValidationError('JPG, PNG, WEBP 파일만 업로드 가능합니다.')
@@ -25,28 +31,36 @@ class UploadedImageCreateSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        """이미지 저장"""
+        """
+        업로드된 이미지의 메타데이터를 DB에 저장
+        """
         file = validated_data['file']
         request = self.context.get('request')
 
+        # 요청한 사용자가 인증되어 있으면 사용자 정보 연결
         user = None
         if request and request.user.is_authenticated:
             user = request.user
 
+        # UploadedImage 객체 생성 및 저장
         uploaded_image = UploadedImage.objects.create(
             user=user,
-            uploaded_image_url=file,  # 필드명 변경됨
+            uploaded_image_url=file,  # 이미지 필드에 파일 객체 할당 (S3 등에 자동 업로드됨)
         )
         return uploaded_image
 
 
 class UploadedImageResponseSerializer(serializers.ModelSerializer):
     """
-    이미지 업로드 응답용
-    Response: { uploaded_image_id, uploaded_image_url, created_at }
+    이미지 업로드 후 성공 응답을 반환하는 Serializer
     """
+    # DB의 id 필드를 응답 시 uploaded_image_id로 이름 변경
     uploaded_image_id = serializers.IntegerField(source='id')
+    
+    # 모델 필드 대신 별도의 로직으로 URL을 가져오기 위한 필드
     uploaded_image_url = serializers.SerializerMethodField()
+    
+    # 생성일자를 특정 ISO 포맷으로 고정
     created_at = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%SZ')
 
     class Meta:
@@ -54,6 +68,9 @@ class UploadedImageResponseSerializer(serializers.ModelSerializer):
         fields = ['uploaded_image_id', 'uploaded_image_url', 'created_at']
 
     def get_uploaded_image_url(self, obj):
+        """
+        이미지 파일의 절대 경로(URL)를 반환
+        """
         if obj.uploaded_image_url:
             return obj.uploaded_image_url.url
         return ''
@@ -61,8 +78,8 @@ class UploadedImageResponseSerializer(serializers.ModelSerializer):
 
 class UploadedImageListSerializer(serializers.ModelSerializer):
     """
-    이미지 목록 조회용
-    GET /api/v1/uploaded-images
+    업로드된 이미지 목록을 조회할 때 사용하는 Serializer
+    (현재 구조는 ResponseSerializer와 동일함)
     """
     uploaded_image_id = serializers.IntegerField(source='id')
     uploaded_image_url = serializers.SerializerMethodField()
@@ -73,6 +90,9 @@ class UploadedImageListSerializer(serializers.ModelSerializer):
         fields = ['uploaded_image_id', 'uploaded_image_url', 'created_at']
 
     def get_uploaded_image_url(self, obj):
+        """
+        이미지 파일의 절대 경로(URL)를 반환
+        """
         if obj.uploaded_image_url:
             return obj.uploaded_image_url.url
         return ''
@@ -152,3 +172,101 @@ class ImageAnalysisStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = ImageAnalysis
         fields = ['analysis_id', 'status', 'progress', 'updated_at']
+
+
+# =============================================================================
+# 이미지 분석 결과 조회용 Serializers
+# GET /api/v1/analyses/{analysis_id}
+# =============================================================================
+
+class ProductSerializer(serializers.ModelSerializer):
+    """
+    상품 정보 Serializer
+    분석 결과에서 매칭된 상품 정보를 표시
+    """
+    image_url = serializers.CharField(source='product_image_url')
+
+    class Meta:
+        model = Product
+        fields = ['id', 'brand_name', 'product_name', 'selling_price', 'image_url', 'product_url']
+
+
+class MatchSerializer(serializers.ModelSerializer):
+    """
+    검출 객체-상품 매핑 Serializer
+    OpenSearch k-NN 검색으로 찾은 유사 상품 정보
+    """
+    product_id = serializers.IntegerField(source='product.id')
+    product = ProductSerializer()
+
+    class Meta:
+        model = ObjectProductMapping
+        fields = ['product_id', 'product']
+
+
+class DetectedObjectResultSerializer(serializers.ModelSerializer):
+    """
+    검출된 객체 결과 Serializer
+    bbox, 카테고리, 매칭된 상품 정보 포함
+    """
+    detected_object_id = serializers.IntegerField(source='id')
+    category_name = serializers.CharField(source='object_category')
+    bbox = serializers.SerializerMethodField()
+    match = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DetectedObject
+        fields = ['detected_object_id', 'category_name', 'bbox', 'match']
+
+    def get_bbox(self, obj):
+        """Bounding box 좌표 반환"""
+        return {
+            'x1': round(obj.bbox_x1, 2),
+            'x2': round(obj.bbox_x2, 2),
+            'y1': round(obj.bbox_y1, 2),
+            'y2': round(obj.bbox_y2, 2),
+        }
+
+    def get_match(self, obj):
+        """가장 높은 신뢰도의 매칭 상품 반환"""
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if mapping:
+            return MatchSerializer(mapping).data
+        return None
+
+
+class UploadedImageInfoSerializer(serializers.ModelSerializer):
+    """
+    업로드된 이미지 정보 (결과 조회용)
+    """
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UploadedImage
+        fields = ['id', 'url']
+
+    def get_url(self, obj):
+        if obj.uploaded_image_url:
+            return obj.uploaded_image_url.url
+        return ''
+
+
+class ImageAnalysisResultSerializer(serializers.ModelSerializer):
+    """
+    이미지 분석 결과 조회 응답용 Serializer
+    GET /api/v1/analyses/{analysis_id}
+    분석 완료 후 검출된 객체들과 매칭된 상품 정보를 반환
+    """
+    analysis_id = serializers.IntegerField(source='id')
+    uploaded_image = UploadedImageInfoSerializer()
+    status = serializers.CharField(source='image_analysis_status')
+    items = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImageAnalysis
+        fields = ['analysis_id', 'uploaded_image', 'status', 'items']
+
+    def get_items(self, obj):
+        """분석된 이미지의 검출된 객체 목록 반환"""
+        detected_objects = obj.uploaded_image.detected_objects.filter(is_deleted=False)
+        return DetectedObjectResultSerializer(detected_objects, many=True).data
