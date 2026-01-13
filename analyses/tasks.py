@@ -141,6 +141,13 @@ def _download_image(image_url: str) -> bytes:
     import os
     from google.cloud import storage
 
+    # Convert GCS HTTPS URL to gs:// format
+    # https://storage.googleapis.com/bucket/path -> gs://bucket/path
+    if 'storage.googleapis.com' in image_url:
+        parts = image_url.split('storage.googleapis.com/')
+        if len(parts) > 1:
+            image_url = 'gs://' + parts[1]
+
     # Parse GCS URL: gs://bucket/path/to/file
     if image_url.startswith('gs://'):
         parts = image_url[5:].split('/', 1)
@@ -203,10 +210,7 @@ def _process_detected_item(
         # Step 1: Crop image and get pixel bbox
         cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
 
-        # Step 2: Upload to GCS
-        crop_url = _upload_crop_to_gcs(analysis_id, item_index, cropped_bytes)
-
-        # Step 3: Generate embedding
+        # Step 2: Generate embedding (GCS 크롭 저장 생략 - bbox 좌표로 프론트에서 표시)
         embedding_service = get_embedding_service()
         embedding = embedding_service.get_image_embedding(cropped_bytes)
 
@@ -231,7 +235,6 @@ def _process_detected_item(
             'category': detected_item.category,
             'bbox': pixel_bbox,
             'confidence': detected_item.confidence,
-            'crop_url': crop_url,
             'product_id': top_match['product_id'],
             'match_score': top_match['score'],
             'evaluation': evaluated,

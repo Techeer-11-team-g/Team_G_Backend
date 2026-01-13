@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import FittingImage
+from .models import FittingImage, UserImage
+from products.models import Product
 
 class FittingImageSerializer(serializers.ModelSerializer):
     fitting_image_id = serializers.IntegerField(source='id', read_only=True)
