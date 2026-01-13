@@ -16,7 +16,7 @@ def process_fitting_task(self, fitting_id):
         result = service.create_fitting_and_wait(
             model_image_url=fitting.user_image.user_image_url,
             product_image_url=fitting.product.product_image_url,
-            category=service.map_category(fitting.category)
+            category=service.map_category(fitting.product.size_group.category)
         )
 
         if result.status == 'completed':

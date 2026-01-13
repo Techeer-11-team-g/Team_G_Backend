@@ -2,24 +2,35 @@ from rest_framework import serializers
 from .models import FittingImage
 
 class FittingImageSerializer(serializers.ModelSerializer):
-    # 명세서의 필드명과 일치시키기 위해 추가 필드 정의
     fitting_image_id = serializers.IntegerField(source='id', read_only=True)
-    status = serializers.SerializerMethodField()
-    polling = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField(read_only=True)
+    polling = serializers.SerializerMethodField(read_only=True)
+
+    # 입력 전용 필드들 (write_only=True)
+    # 프론트에서 'product'라는 키로 ID를 보내면 모델의 product 외래키와 연결됩니다.
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(), 
+        write_only=True
+    )
+    user_image = serializers.PrimaryKeyRelatedField(
+        queryset=UserImage.objects.all(), 
+        write_only=True
+    )
 
     class Meta:
         model = FittingImage
-        fields = ['fitting_image_id', 'status', 'fitting_image_url', 'polling']
+        fields = [
+            'fitting_image_id', 'status', 'fitting_image_url', 
+            'polling', 'product', 'user_image'
+        ]
 
-    # 모델의 소문자 상태값을 명세서의 대문자 규격으로 변환
     def get_status(self, obj):
         return obj.fitting_image_status.upper()
 
-    # 명세서의 polling 경로 구조를 동적으로 생성
     def get_polling(self, obj):
         return {
-            "status_url": f"/api/v1/fitting-images/{obj.id}/status",
-            "result_url": f"/api/v1/fitting-images/{obj.id}"
+            "status_url": f"/api/v1/fittings/status/{obj.id}", # URL 구조 확인 필요
+            "result_url": f"/api/v1/fittings/result/{obj.id}"
         }
 class FittingStatusSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
