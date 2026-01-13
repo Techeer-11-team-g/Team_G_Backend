@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import mixins
 from rest_framework.pagination import CursorPagination
 from .models import Order
-from .serializers import OrderCreateSerializer, OrderSerializer, OrderListSerializer
+from .serializers import OrderCreateSerializer, OrderSerializer, OrderListSerializer, OrderDetailSerializer
 
 class OrderCursorPagination(CursorPagination):
     ordering = '-created_at'
@@ -24,7 +24,7 @@ class OrderCursorPagination(CursorPagination):
             'next_cursor': next_cursor,
         })
 
-class OrderViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = OrderCursorPagination # 위에서 만든 클래스 연결 
 
@@ -42,6 +42,8 @@ class OrderViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             return OrderCreateSerializer
         elif self.action == 'list': # list 액션 추가 
             return OrderListSerializer
+        elif self.action == 'retrieve':
+            return OrderDetailSerializer 
         return OrderSerializer
 
     def create(self, request, *args, **kwargs):

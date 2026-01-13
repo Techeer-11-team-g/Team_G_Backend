@@ -14,6 +14,24 @@ class OrderSerializer(serializers.ModelSerializer):
         ret['order_id'] = ret.pop('id')
         return ret 
 
+class OrderItemDetailSerializer(serializers.ModelSerializer):
+    order_item_id = serializers.IntegerField(source='id')
+    selected_product_id = serializers.IntegerField(source='product_item.id')
+    product_name = serializers.CharField(source='product_item.product.product_name')
+    
+    class Meta:
+        model = OrderItem
+        fields = ['order_item_id', 'order_status', 'selected_product_id', 'purchased_quantity', 'price_at_order', 'product_name']
+
+class OrderDetailSerializer(serializers.ModelSerializer):
+    order_id = serializers.IntegerField(source='id')
+    order_items = OrderItemDetailSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Order
+        fields = ['order_id', 'total_price', 'delivery_address', 'order_items', 'created_at', 'updated_at']
+
+
 class OrderListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
