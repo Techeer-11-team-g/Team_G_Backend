@@ -24,3 +24,18 @@ class UserProfileSerializer(serializers.ModelSerializer):
         ]
         # 조회 전용이므로 읽기 전용 필드로 설정할 수 있습니다.
         read_only_fields = ['id', 'username', 'email', 'created_at']
+
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(source='id', read_only=True)
+    user_name = serializers.CharField(source='username', required=False)
+    user_email = serializers.EmailField(source='email', required=False)
+    
+    class Meta:
+        model = User
+        fields = [
+            'user_id', 'user_name', 'user_email', 'address', 
+            'payment', 'phone_number', 'birth_date', 
+            'user_image_url', 'updated_at'
+        ]
+        read_only_fields = ['user_id', 'user_image_url', 'updated_at']
