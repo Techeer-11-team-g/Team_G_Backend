@@ -143,12 +143,6 @@ class DetectedObject(models.Model):
         help_text='검출된 객체의 카테고리 (상의, 하의, 신발 등)',
     )
 
-    confidence = models.FloatField(
-        default=0.0,
-        verbose_name='신뢰도',
-        help_text='0.0 ~ 1.0 사이의 값',
-    )
-
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name='생성 일자',
@@ -193,7 +187,7 @@ class ObjectProductMapping(models.Model):
         DetectedObject,
         on_delete=models.CASCADE,
         related_name='product_mappings',
-        db_column='detected_object_id',
+        db_column='object_id',
         verbose_name='검출된 객체',
     )
 
@@ -214,11 +208,6 @@ class ObjectProductMapping(models.Model):
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name='생성 일자',
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        verbose_name='수정 일자',
     )
 
     is_deleted = models.BooleanField(

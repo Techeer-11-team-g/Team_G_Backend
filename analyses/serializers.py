@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import UploadedImage
+from .models import UploadedImage, ImageAnalysis
 
 
 class UploadedImageCreateSerializer(serializers.ModelSerializer):
