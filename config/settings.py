@@ -83,6 +83,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database - MySQL
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
+# MySQL Database
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -96,6 +97,14 @@ DATABASES = {
         },
     }
 }
+
+# Local Development (SQLite)
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.sqlite3',
+#         'NAME': BASE_DIR / 'db.sqlite3',
+#     }
+# }
 
 # PyMySQL as MySQL client
 import pymysql
