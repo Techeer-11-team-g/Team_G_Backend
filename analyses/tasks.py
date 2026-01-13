@@ -137,8 +137,16 @@ def process_detected_item_task(
 
 
 def _download_image(image_url: str) -> bytes:
-    """Download image from GCS URL."""
+    """Download image from URL or local file path."""
+    import os
     from google.cloud import storage
+
+    # Convert GCS HTTPS URL to gs:// format
+    # https://storage.googleapis.com/bucket/path -> gs://bucket/path
+    if 'storage.googleapis.com' in image_url:
+        parts = image_url.split('storage.googleapis.com/')
+        if len(parts) > 1:
+            image_url = 'gs://' + parts[1]
 
     # Parse GCS URL: gs://bucket/path/to/file
     if image_url.startswith('gs://'):
@@ -151,12 +159,21 @@ def _download_image(image_url: str) -> bytes:
         blob = bucket.blob(blob_name)
 
         return blob.download_as_bytes()
-    else:
+    elif image_url.startswith('/media/'):
+        # Local media file - read directly from filesystem
+        local_path = settings.BASE_DIR / image_url.lstrip('/')
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(f"Local file not found: {local_path}")
+        with open(local_path, 'rb') as f:
+            return f.read()
+    elif image_url.startswith('http://') or image_url.startswith('https://'):
         # HTTP URL - use requests
         import requests
         response = requests.get(image_url, timeout=30)
         response.raise_for_status()
         return response.content
+    else:
+        raise ValueError(f"Unsupported URL format: {image_url}")
 
 
 def _detect_objects(image_bytes: bytes) -> list[DetectedItem]:
@@ -190,13 +207,10 @@ def _process_detected_item(
         Processed item result
     """
     try:
-        # Step 1: Crop image
-        cropped_bytes = _crop_image(image_bytes, detected_item)
+        # Step 1: Crop image and get pixel bbox
+        cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
 
-        # Step 2: Upload to GCS
-        crop_url = _upload_crop_to_gcs(analysis_id, item_index, cropped_bytes)
-
-        # Step 3: Generate embedding
+        # Step 2: Generate embedding (GCS 크롭 저장 생략 - bbox 좌표로 프론트에서 표시)
         embedding_service = get_embedding_service()
         embedding = embedding_service.get_image_embedding(cropped_bytes)
 
@@ -219,9 +233,8 @@ def _process_detected_item(
         return {
             'index': item_index,
             'category': detected_item.category,
-            'bbox': detected_item.bbox.to_dict(),
+            'bbox': pixel_bbox,
             'confidence': detected_item.confidence,
-            'crop_url': crop_url,
             'product_id': top_match['product_id'],
             'match_score': top_match['score'],
             'evaluation': evaluated,
@@ -232,17 +245,27 @@ def _process_detected_item(
         return None
 
 
-def _crop_image(image_bytes: bytes, item: DetectedItem) -> bytes:
-    """Crop detected item from image."""
+def _crop_image(image_bytes: bytes, item: DetectedItem) -> tuple[bytes, dict]:
+    """Crop detected item from image and return pixel bbox."""
     image = Image.open(io.BytesIO(image_bytes))
     width, height = image.size
 
-    # Convert normalized coordinates to pixels
+    # Convert normalized coordinates (0-1000) to pixels
     bbox = item.bbox
     x_min = int(bbox.x_min * width / 1000)
     y_min = int(bbox.y_min * height / 1000)
     x_max = int(bbox.x_max * width / 1000)
     y_max = int(bbox.y_max * height / 1000)
+
+    # Pixel bbox for storage
+    pixel_bbox = {
+        'x_min': x_min,
+        'y_min': y_min,
+        'x_max': x_max,
+        'y_max': y_max,
+        'width': x_max - x_min,
+        'height': y_max - y_min,
+    }
 
     # Crop
     cropped = image.crop((x_min, y_min, x_max, y_max))
@@ -250,7 +273,7 @@ def _crop_image(image_bytes: bytes, item: DetectedItem) -> bytes:
     # Convert to bytes
     output = io.BytesIO()
     cropped.save(output, format='JPEG', quality=90)
-    return output.getvalue()
+    return output.getvalue(), pixel_bbox
 
 
 def _upload_crop_to_gcs(analysis_id: str, item_index: int, image_bytes: bytes) -> str:

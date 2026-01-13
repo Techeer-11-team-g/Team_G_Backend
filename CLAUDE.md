@@ -52,6 +52,13 @@ python manage.py collectstatic --noinput
 python manage.py createsuperuser
 ```
 
+### Testing
+```bash
+python manage.py test                    # Run all tests
+python manage.py test analyses           # Run tests for specific app
+python manage.py test analyses.tests.TestAnalysisAPI  # Run specific test class
+```
+
 ## Architecture
 
 ### Core Flow
@@ -61,11 +68,33 @@ Image Upload → Google Vision (detect items) → Crop items → OpenAI (vectori
     → (optional) fashn.ai (virtual fitting)
 ```
 
-### Key Directories
+### Django Apps
 
-- `config/` - Django project settings, Celery config, URL routing
-- `services/` - External API integration modules (Vision, OpenAI, OpenSearch, fashn.ai, Redis, RabbitMQ)
-- `analyses/` - Django app containing Celery tasks for the image analysis pipeline
+| App | Purpose |
+|-----|---------|
+| `users` | Custom user model (`AUTH_USER_MODEL = 'users.User'`) |
+| `products` | Product catalog with `Product`, `SizeCode` models |
+| `analyses` | Image upload, object detection, product matching pipeline |
+| `fittings` | Virtual fitting with fashn.ai integration |
+| `orders` | Order management |
+
+### Key Models (`analyses/models.py`)
+
+- `UploadedImage` → `ImageAnalysis` (1:N) - Analysis jobs per image
+- `UploadedImage` → `DetectedObject` (1:N) - Fashion items found in image
+- `DetectedObject` → `ObjectProductMapping` → `Product` - k-NN search results
+- `SelectedProduct` - User's product selections with size
+
+### API Endpoints
+
+```
+POST /api/v1/uploaded-images     - Upload image
+GET  /api/v1/uploaded-images     - List uploads (cursor pagination)
+POST /api/v1/analyses            - Start analysis (triggers Celery task)
+GET  /api/v1/analyses/{id}/status - Poll analysis status/progress
+GET  /health/                    - Health check
+GET  /metrics                    - Prometheus metrics
+```
 
 ### Services Module (`services/`)
 
@@ -85,11 +114,16 @@ from services import OpenSearchService, LangChainService
 | `redis_service` | Analysis status management (PENDING/RUNNING/DONE/FAILED) |
 | `rabbitmq_client` | Direct RabbitMQ connection (Celery uses this implicitly) |
 
-### Celery Tasks (`analyses/tasks.py`)
+### Celery Tasks
 
-Main tasks:
+**`analyses/tasks.py`:**
 - `process_image_analysis` - Full pipeline: detect → crop → embed → search → evaluate
-- `process_virtual_fitting` - Virtual try-on via fashn.ai
+- `process_virtual_fitting` - Virtual try-on via fashn.ai (also in `fittings/tasks.py`)
+
+**`fittings/tasks.py`:**
+- `process_fitting_task` - Alternative fitting task that updates DB directly
+
+Task configuration: `@shared_task(bind=True, max_retries=3, default_retry_delay=60)`
 
 ### Configuration
 

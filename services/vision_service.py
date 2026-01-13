@@ -59,35 +59,45 @@ class DetectedItem:
 
 # Fashion category mapping from Vision API labels
 FASHION_CATEGORIES = {
+    # 1. 신발
     'shoe': 'shoes',
     'shoes': 'shoes',
     'sneaker': 'shoes',
     'boot': 'shoes',
     'sandal': 'shoes',
     'footwear': 'shoes',
+    
+    # 2. 가방
     'bag': 'bag',
     'handbag': 'bag',
     'backpack': 'bag',
     'purse': 'bag',
+    
+    # 3. 상의
     'top': 'top',
     'shirt': 'top',
     't-shirt': 'top',
     'blouse': 'top',
     'sweater': 'top',
     'hoodie': 'top',
+    
+    # 4. 하의
     'pants': 'bottom',
     'jeans': 'bottom',
     'trousers': 'bottom',
     'shorts': 'bottom',
+    'skirt': 'bottom',
+    
+    # 5. 외투
     'jacket': 'outerwear',
     'coat': 'outerwear',
     'outerwear': 'outerwear',
     'blazer': 'outerwear',
+    
+    # 6. 모자
     'hat': 'hat',
     'cap': 'hat',
     'beanie': 'hat',
-    'skirt': 'skirt',
-    'dress': 'dress',
 }
 
 
@@ -128,14 +138,9 @@ class VisionService:
     def _detect_objects(self, image: types.Image) -> list[DetectedItem]:
         """
         Internal method to detect objects using Vision API.
-
-        Args:
-            image: Vision API Image object
-
-        Returns:
-            List of detected fashion items
+        Returns only the highest confidence item for each category.
         """
-        detected_items = []
+        best_items_by_category = {}
 
         try:
             # Object localization for bounding boxes
@@ -149,23 +154,25 @@ class VisionService:
                 category = self._map_to_fashion_category(obj.name.lower())
 
                 if category and obj.score >= self.min_confidence:
-                    # Convert normalized vertices to pixel coordinates
-                    vertices = obj.bounding_poly.normalized_vertices
-                    bbox = BoundingBox(
-                        x_min=int(vertices[0].x * 1000),  # Normalized 0-1 → 0-1000
-                        y_min=int(vertices[0].y * 1000),
-                        x_max=int(vertices[2].x * 1000),
-                        y_max=int(vertices[2].y * 1000),
-                    )
+                    # Keep only the highest confidence item for each category
+                    if category not in best_items_by_category or obj.score > best_items_by_category[category].confidence:
+                        vertices = obj.bounding_poly.normalized_vertices
+                        bbox = BoundingBox(
+                            x_min=int(vertices[0].x * 1000),
+                            y_min=int(vertices[0].y * 1000),
+                            x_max=int(vertices[2].x * 1000),
+                            y_max=int(vertices[2].y * 1000),
+                        )
 
-                    detected_items.append(DetectedItem(
-                        category=category,
-                        bbox=bbox,
-                        confidence=obj.score,
-                    ))
+                        best_items_by_category[category] = DetectedItem(
+                            category=category,
+                            bbox=bbox,
+                            confidence=obj.score,
+                        )
 
-            logger.info(f"Detected {len(detected_items)} fashion items")
-            return detected_items
+            result_list = list(best_items_by_category.values())
+            logger.info(f"Detected {len(result_list)} unique fashion items")
+            return result_list
 
         except Exception as e:
             logger.error(f"Failed to detect objects: {e}")

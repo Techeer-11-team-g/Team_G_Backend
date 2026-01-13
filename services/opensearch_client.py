@@ -61,7 +61,7 @@ class OpenSearchService:
                 'product_id': {'type': 'keyword'},
                 'embedding': {
                     'type': 'knn_vector',
-                    'dimension': 1536,  # OpenAI text-embedding-3-small
+                    'dimension': 512,  # CLIP clip-vit-base-patch32
                     'method': {
                         'name': 'hnsw',
                         'space_type': 'cosinesimil',
@@ -128,7 +128,7 @@ class OpenSearchService:
         embedding: list[float],
         category: str = None,
         brand: str = None,
-        index_name: str = 'products',
+        index_name: str = 'musinsa_products',
     ) -> dict:
         """
         Index a product with its embedding.
@@ -189,7 +189,7 @@ class OpenSearchService:
         k: int = 5,
         category: str = None,
         brand: str = None,
-        index_name: str = 'products',
+        index_name: str = 'musinsa_products',
     ) -> list[dict]:
         """
         Search for similar products with optional filters.
@@ -221,7 +221,7 @@ class OpenSearchService:
                         'must': must_clauses,
                         'filter': {
                             'knn': {
-                                'embedding': {
+                                'image_vector': {
                                     'vector': embedding,
                                     'k': k * 2,  # Get more candidates before filtering
                                 }
@@ -236,7 +236,7 @@ class OpenSearchService:
                 'size': k,
                 'query': {
                     'knn': {
-                        'embedding': {
+                        'image_vector': {
                             'vector': embedding,
                             'k': k,
                         }
@@ -249,10 +249,14 @@ class OpenSearchService:
         results = []
         for hit in response['hits']['hits']:
             results.append({
-                'product_id': hit['_source']['product_id'],
+                'product_id': hit['_source'].get('itemId'),
                 'score': hit['_score'],
                 'category': hit['_source'].get('category'),
                 'brand': hit['_source'].get('brand'),
+                'name': hit['_source'].get('productName'),
+                'image_url': hit['_source'].get('imageUrl'),
+                'price': hit['_source'].get('price'),
+                'product_url': hit['_source'].get('productUrl'),
             })
 
         return results

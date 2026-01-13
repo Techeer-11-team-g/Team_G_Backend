@@ -15,6 +15,13 @@ class User(AbstractUser):
         verbose_name='전화번호',
     )
 
+    payment = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name='결제 수단',
+    )
+
     address = models.TextField(
         blank=True,
         null=True,
@@ -32,6 +39,13 @@ class User(AbstractUser):
         blank=True,
         null=True,
         verbose_name='프로필 이미지 URL',
+    )
+
+    payment = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name='결제 정보',
     )
 
     created_at = models.DateTimeField(
