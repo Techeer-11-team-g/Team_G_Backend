@@ -71,3 +71,7 @@ htmlcov/
 # Google Cloud
 keys/
 *.json
+
+# Credentials
+credentials/
+*.json
