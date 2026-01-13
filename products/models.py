@@ -1,84 +1,6 @@
 from django.db import models
 
 
-class SizeGroup(models.Model):
-    """
-    사이즈 그룹 테이블
-    ERD: size_group
-    사이즈 체계 그룹 (예: 의류 사이즈, 신발 사이즈 등)
-    """
-    category = models.CharField(
-        max_length=100,
-        verbose_name='카테고리',
-    )
-
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name='생성 일자',
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        verbose_name='수정 일자',
-    )
-
-    is_deleted = models.BooleanField(
-        default=False,
-        verbose_name='삭제 여부',
-    )
-
-    class Meta:
-        db_table = 'size_group'
-        verbose_name = '사이즈 그룹'
-        verbose_name_plural = '사이즈 그룹 목록'
-
-    def __str__(self):
-        return self.category
-
-
-class SizeCode(models.Model):
-    """
-    사이즈 코드 테이블
-    ERD: size_code
-    개별 사이즈 정보 (S, M, L, 260, 270 등)
-    """
-    size_group = models.ForeignKey(
-        SizeGroup,
-        on_delete=models.CASCADE,
-        related_name='size_codes',
-        db_column='size_group_id',
-        verbose_name='사이즈 그룹',
-    )
-
-    size_value = models.CharField(
-        max_length=50,
-        verbose_name='사이즈 값',
-    )
-
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name='생성 일자',
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        verbose_name='수정 일자',
-    )
-
-    is_deleted = models.BooleanField(
-        default=False,
-        verbose_name='삭제 여부',
-    )
-
-    class Meta:
-        db_table = 'size_code'
-        verbose_name = '사이즈 코드'
-        verbose_name_plural = '사이즈 코드 목록'
-
-    def __str__(self):
-        return f"{self.size_group.category} - {self.size_value}"
-
-
 class Product(models.Model):
     """
     상품 테이블
@@ -136,3 +58,46 @@ class Product(models.Model):
 
     def __str__(self):
         return f"[{self.brand_name}] {self.product_name}"
+
+
+class SizeCode(models.Model):
+    """
+    사이즈 코드 테이블
+    ERD: size_code
+    개별 사이즈 정보 (S, M, L, 260, 270 등)
+    """
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='size_codes',
+        db_column='product_id',
+        verbose_name='상품',
+    )
+
+    size_value = models.CharField(
+        max_length=50,
+        verbose_name='사이즈 값',
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='생성 일자',
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name='수정 일자',
+    )
+
+    is_deleted = models.BooleanField(
+        default=False,
+        verbose_name='삭제 여부',
+    )
+
+    class Meta:
+        db_table = 'size_code'
+        verbose_name = '사이즈 코드'
+        verbose_name_plural = '사이즈 코드 목록'
+
+    def __str__(self):
+        return f"{self.product.product_name} - {self.size_value}"

@@ -207,17 +207,16 @@ class MatchSerializer(serializers.ModelSerializer):
 class DetectedObjectResultSerializer(serializers.ModelSerializer):
     """
     검출된 객체 결과 Serializer
-    bbox, 카테고리, 신뢰도, 매칭된 상품 정보 포함
+    bbox, 카테고리, 매칭된 상품 정보 포함
     """
     detected_object_id = serializers.IntegerField(source='id')
     category_name = serializers.CharField(source='object_category')
-    confidence_score = serializers.FloatField(source='confidence')
     bbox = serializers.SerializerMethodField()
     match = serializers.SerializerMethodField()
 
     class Meta:
         model = DetectedObject
-        fields = ['detected_object_id', 'category_name', 'confidence_score', 'bbox', 'match']
+        fields = ['detected_object_id', 'category_name', 'bbox', 'match']
 
     def get_bbox(self, obj):
         """Bounding box 좌표 반환"""

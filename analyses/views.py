@@ -200,7 +200,7 @@ class ImageAnalysisResultView(APIView):
 
         Response 200: {
             analysis_id, uploaded_image, status, items: [
-                { detected_object_id, category_name, confidence_score, bbox, match }
+                { detected_object_id, category_name, bbox, match }
             ]
         }
         """
