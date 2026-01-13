@@ -187,7 +187,7 @@ class ObjectProductMapping(models.Model):
         DetectedObject,
         on_delete=models.CASCADE,
         related_name='product_mappings',
-        db_column='detected_object_id',
+        db_column='object_id',
         verbose_name='검출된 객체',
     )
 

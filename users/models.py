@@ -15,6 +15,13 @@ class User(AbstractUser):
         verbose_name='전화번호',
     )
 
+    payment = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name='결제 수단',
+    )
+
     address = models.TextField(
         blank=True,
         null=True,
