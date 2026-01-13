@@ -29,8 +29,8 @@ class FittingImageSerializer(serializers.ModelSerializer):
 
     def get_polling(self, obj):
         return {
-            "status_url": f"/api/v1/fittings/status/{obj.id}", # URL 구조 확인 필요
-            "result_url": f"/api/v1/fittings/result/{obj.id}"
+            "status_url": f"/api/v1/fitting-images/{obj.id}/status",
+            "result_url": f"/api/v1/fitting-images/{obj.id}"
         }
 class FittingStatusSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
