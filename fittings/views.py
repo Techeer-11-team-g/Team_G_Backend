@@ -7,28 +7,22 @@ from .serializers import FittingImageSerializer, FittingStatusSerializer
 from .tasks import process_fitting_task
 
 class FittingRequestView(APIView):
-    """
-    [POST] 가상 피팅 요청 생성
-    """
-    def post(self, request):
-        # 명세서의 Request Body 반영: detected_object_id, product_id, user_image_url
-        product_id = request.data.get('product_id')
-        user_image_url = request.data.get('user_image_url')
-        user_image_id = request.data.get('user_image_id')
+   def post(self, request):
+        # 1. 시리얼라이저로 데이터 검증 (product, user_image 존재 여부 등 체크)
+        serializer = FittingImageSerializer(data=request.data)
         
-        # 1. DB 레코드 생성 (ERD의 fitting_image 테이블 기반)
-        fitting = FittingImage.objects.create(
-            product_id=product_id,
-            user_image_id=user_image_id,
-            fitting_image_status=FittingImage.Status.PENDING
-        )
-
-        # 2. Celery 비동기 작업 시작
-        process_fitting_task.delay(fitting.id)
-
-        serializer = FittingImageSerializer(fitting)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
+        if serializer.is_valid():
+            # 2. DB 레코드 생성 (상태는 PENDING)
+            fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
+            
+            # 3. 프론트에서 보낸 user_image_url을 꺼내서 Celery에 함께 전달
+            user_image_url = request.data.get('user_image_url')
+            process_fitting_task.delay(fitting.id, user_image_url)
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
 class FittingStatusView(APIView):
     """
     [GET] 가상 피팅 상태 조회
