@@ -14,6 +14,17 @@ class OrderSerializer(serializers.ModelSerializer):
         ret['order_id'] = ret.pop('id')
         return ret 
 
+class OrderListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Order
+        fields = ['id', 'total_price', 'created_at']
+        read_only_fields = ['id', 'total_price', 'created_at']
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Rename 'id' to 'order_id'
+        ret['order_id'] = ret.pop('id')
+        return ret
+
 
 class OrderCreateSerializer(serializers.ModelSerializer):
     cart_item_ids = serializers.ListField(
@@ -94,4 +105,4 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     
     def to_representation(self, instance):
         # reuse OrderSerializer's representation for consistency
-        return OrderSerializer(instance).data
+        return OrderSerializer(instance).data 
