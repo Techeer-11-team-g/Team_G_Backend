@@ -109,11 +109,11 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             for item in cart_items:
                 order_items.append(OrderItem(
                     order=order,
-                    product_item=item.selected_product,
+                    selected_product=item.selected_product,
                     purchased_quantity=item.quantity,
                     price_at_order=item.selected_product.product.selling_price,
-                    order_status=Order.OrderStatus.PAID 
-                )) 
+                    order_status=OrderItem.OrderStatus.PAID
+                ))
             OrderItem.objects.bulk_create(order_items)
 
             # 장바구니 항목 삭제 (Soft Delete)
