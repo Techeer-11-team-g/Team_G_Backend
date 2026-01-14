@@ -75,3 +75,7 @@ keys/
 # Credentials
 credentials/
 *.json
+
+# Local scripts (not for production)
+import_products.py
+FASHIONCLIP_MIGRATION.md

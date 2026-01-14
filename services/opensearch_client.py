@@ -260,3 +260,90 @@ class OpenSearchService:
             })
 
         return results
+
+    # Related categories that can be matched together
+    RELATED_CATEGORIES = {
+        'top': ['top', 'outer'],
+        'outer': ['outer', 'top'],
+        'pants': ['pants', 'dress'],  # 바지 + 치마/원피스
+        'bottom': ['pants', 'dress'],  # 하의 = 바지 + 치마/원피스
+        'dress': ['dress', 'pants'],  # 치마/원피스 + 바지
+        'shoes': ['shoes'],
+        'bag': ['bag'],
+    }
+
+    def search_similar_products_hybrid(
+        self,
+        embedding: list[float],
+        category: str,
+        k: int = 5,
+        search_k: int = 100,
+        index_name: str = 'musinsa_products',
+    ) -> list[dict]:
+        """
+        하이브리드 검색: 순수 벡터 유사도로 넓게 검색 후 카테고리 필터링.
+
+        벡터 유사도가 높으면서 + 같은/관련 카테고리인 상품을 찾음.
+
+        Args:
+            embedding: Query embedding vector
+            category: Target category to filter
+            k: Number of results to return
+            search_k: Number of candidates to search before filtering (default 100)
+            index_name: Index to search
+
+        Returns:
+            List of matching products with scores
+        """
+        # 1. 카테고리 필터 없이 넓게 검색 (순수 벡터 유사도)
+        query = {
+            'size': search_k,
+            'query': {
+                'knn': {
+                    'image_vector': {
+                        'vector': embedding,
+                        'k': search_k,
+                    }
+                }
+            }
+        }
+
+        response = self.client.search(index=index_name, body=query)
+
+        # 2. 관련 카테고리 목록 가져오기
+        related_categories = self.RELATED_CATEGORIES.get(category, [category])
+
+        # 3. 결과에서 같은/관련 카테고리만 필터링
+        results = []
+        all_results = []  # 카테고리 무관 전체 결과 (fallback용)
+
+        for hit in response['hits']['hits']:
+            product_category = hit['_source'].get('category')
+            result_item = {
+                'product_id': hit['_source'].get('itemId'),
+                'score': hit['_score'],
+                'category': product_category,
+                'brand': hit['_source'].get('brand'),
+                'name': hit['_source'].get('productName'),
+                'image_url': hit['_source'].get('imageUrl'),
+                'price': hit['_source'].get('price'),
+                'product_url': hit['_source'].get('productUrl'),
+            }
+
+            all_results.append(result_item)
+
+            if product_category in related_categories:
+                results.append(result_item)
+                if len(results) >= k:
+                    break
+
+        # 4. 카테고리 필터 결과가 부족하면 벡터 유사도 높은 순으로 반환
+        if len(results) < k:
+            for item in all_results:
+                if item not in results:
+                    results.append(item)
+                    if len(results) >= k:
+                        break
+
+        return results
+

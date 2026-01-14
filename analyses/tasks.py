@@ -4,10 +4,10 @@ Celery Tasks for Image Analysis Pipeline.
 Pipeline:
 1. Receive image analysis request
 2. Google Vision API for object detection (bbox)
-3. Crop detected items and upload to GCS
-4. Generate embeddings using OpenAI
-5. Search similar products in OpenSearch k-NN
-6. Evaluate results with LangChain
+3. Crop detected items with padding
+4. Generate embeddings using FashionCLIP
+5. Hybrid search in OpenSearch (k-NN + keyword)
+6. BLIP + CLIP re-ranking for better accuracy
 7. Save results to MySQL
 8. Update status in Redis
 """
@@ -23,8 +23,7 @@ from PIL import Image
 from services.vision_service import get_vision_service, DetectedItem
 from services.embedding_service import get_embedding_service
 from services.opensearch_client import OpenSearchService
-from services.redis_service import get_redis_service, AnalysisStatus
-from services.langchain_service import LangChainService
+from services.redis_service import get_redis_service
 
 logger = logging.getLogger(__name__)
 
@@ -210,34 +209,64 @@ def _process_detected_item(
         # Step 1: Crop image and get pixel bbox
         cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
 
-        # Step 2: Generate embedding (GCS 크롭 저장 생략 - bbox 좌표로 프론트에서 표시)
+        # Step 2: Generate embedding
         embedding_service = get_embedding_service()
         embedding = embedding_service.get_image_embedding(cropped_bytes)
 
-        # Step 4: Search similar products
+        # Step 3: Search similar products
+        # Vision API 카테고리 → OpenSearch 카테고리 매핑
+        category_mapping = {
+            'bottom': 'pants',
+            'outerwear': 'outer',
+        }
+        search_category = category_mapping.get(detected_item.category, detected_item.category)
+
         opensearch_service = OpenSearchService()
-        search_results = opensearch_service.search_similar_products(
+        # 1차: 하이브리드 검색으로 후보 30개 가져오기
+        search_results = opensearch_service.search_similar_products_hybrid(
             embedding=embedding,
-            k=5,
-            category=detected_item.category,
+            category=search_category,
+            k=30,
+            search_k=100,
         )
 
         if not search_results:
             logger.warning(f"No matching products found for item {item_index}")
             return None
 
-        # Step 5: Evaluate with LangChain (optional quality check)
-        top_match = search_results[0]
-        evaluated = _evaluate_match(detected_item, top_match)
+        # 2차: BLIP + CLIP 리랭킹
+        from services.blip_service import get_blip_service
+        try:
+            blip_service = get_blip_service()
+            search_results = blip_service.rerank_products(
+                image_bytes=cropped_bytes,
+                candidates=search_results,
+                top_k=5,
+                image_embedding=embedding,  # CLIP cross-encoder용
+                category=detected_item.category,  # 카테고리별 프롬프트용
+            )
+            logger.info(f"Item {item_index} - BLIP + CLIP re-ranking completed")
+        except Exception as e:
+            logger.warning(f"BLIP re-ranking failed, using original results: {e}")
+            search_results = search_results[:5]
+
+        # 상위 5개 매칭 결과 반환
+        top_matches = []
+        for match in search_results[:5]:
+            top_matches.append({
+                'product_id': match['product_id'],
+                'score': match.get('combined_score', match['score']),
+                'name': match.get('name'),
+                'image_url': match.get('image_url'),
+                'price': match.get('price'),
+            })
 
         return {
             'index': item_index,
             'category': detected_item.category,
             'bbox': pixel_bbox,
             'confidence': detected_item.confidence,
-            'product_id': top_match['product_id'],
-            'match_score': top_match['score'],
-            'evaluation': evaluated,
+            'matches': top_matches,  # 상위 5개
         }
 
     except Exception as e:
@@ -245,8 +274,18 @@ def _process_detected_item(
         return None
 
 
-def _crop_image(image_bytes: bytes, item: DetectedItem) -> tuple[bytes, dict]:
-    """Crop detected item from image and return pixel bbox."""
+def _crop_image(image_bytes: bytes, item: DetectedItem, padding_ratio: float = 0.25) -> tuple[bytes, dict]:
+    """
+    Crop detected item from image with padding for better embedding quality.
+
+    Args:
+        image_bytes: Original image bytes
+        item: Detected item with bounding box
+        padding_ratio: Padding as ratio of bbox size (default 25%)
+
+    Returns:
+        Tuple of (cropped image bytes, pixel bbox dict)
+    """
     image = Image.open(io.BytesIO(image_bytes))
     width, height = image.size
 
@@ -257,7 +296,7 @@ def _crop_image(image_bytes: bytes, item: DetectedItem) -> tuple[bytes, dict]:
     x_max = int(bbox.x_max * width / 1000)
     y_max = int(bbox.y_max * height / 1000)
 
-    # Pixel bbox for storage
+    # Original pixel bbox for storage (without padding)
     pixel_bbox = {
         'x_min': x_min,
         'y_min': y_min,
@@ -267,57 +306,25 @@ def _crop_image(image_bytes: bytes, item: DetectedItem) -> tuple[bytes, dict]:
         'height': y_max - y_min,
     }
 
-    # Crop
-    cropped = image.crop((x_min, y_min, x_max, y_max))
+    # Add padding for better embedding (more context helps CLIP)
+    bbox_width = x_max - x_min
+    bbox_height = y_max - y_min
+    pad_x = int(bbox_width * padding_ratio)
+    pad_y = int(bbox_height * padding_ratio)
+
+    # Expanded bbox with padding (clamped to image bounds)
+    crop_x_min = max(0, x_min - pad_x)
+    crop_y_min = max(0, y_min - pad_y)
+    crop_x_max = min(width, x_max + pad_x)
+    crop_y_max = min(height, y_max + pad_y)
+
+    # Crop with padding
+    cropped = image.crop((crop_x_min, crop_y_min, crop_x_max, crop_y_max))
 
     # Convert to bytes
     output = io.BytesIO()
-    cropped.save(output, format='JPEG', quality=90)
+    cropped.save(output, format='JPEG', quality=95)
     return output.getvalue(), pixel_bbox
-
-
-def _upload_crop_to_gcs(analysis_id: str, item_index: int, image_bytes: bytes) -> str:
-    """Upload cropped image to GCS."""
-    from google.cloud import storage
-
-    bucket_name = getattr(settings, 'GCS_BUCKET_NAME', '')
-    if not bucket_name:
-        logger.warning("GCS_BUCKET_NAME not configured, skipping upload")
-        return ''
-
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-
-    blob_name = f"crops/{analysis_id}/{item_index}.jpg"
-    blob = bucket.blob(blob_name)
-    blob.upload_from_string(image_bytes, content_type='image/jpeg')
-
-    return f"gs://{bucket_name}/{blob_name}"
-
-
-def _evaluate_match(detected_item: DetectedItem, match: dict) -> dict:
-    """
-    Evaluate match quality using LangChain.
-
-    Args:
-        detected_item: Detected item
-        match: Search result match
-
-    Returns:
-        Evaluation result
-    """
-    try:
-        langchain_service = LangChainService()
-        evaluation = langchain_service.evaluate_search_result(
-            category=detected_item.category,
-            confidence=detected_item.confidence,
-            match_score=match['score'],
-            product_id=match['product_id'],
-        )
-        return evaluation
-    except Exception as e:
-        logger.warning(f"LangChain evaluation failed: {e}")
-        return {'quality': 'unknown', 'reason': str(e)}
 
 
 def _save_analysis_results(

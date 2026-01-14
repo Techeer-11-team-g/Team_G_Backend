@@ -171,12 +171,56 @@ class VisionService:
                         )
 
             result_list = list(best_items_by_category.values())
-            logger.info(f"Detected {len(result_list)} unique fashion items")
-            return result_list
+
+            # 겹치는 bbox 제거 (IoU > 0.7이면 confidence 높은 것만 유지)
+            filtered_list = self._remove_overlapping_items(result_list)
+            logger.info(f"Detected {len(filtered_list)} unique fashion items")
+            return filtered_list
 
         except Exception as e:
             logger.error(f"Failed to detect objects: {e}")
             raise
+
+    def _calculate_iou(self, bbox1: BoundingBox, bbox2: BoundingBox) -> float:
+        """Calculate Intersection over Union of two bounding boxes."""
+        x_left = max(bbox1.x_min, bbox2.x_min)
+        y_top = max(bbox1.y_min, bbox2.y_min)
+        x_right = min(bbox1.x_max, bbox2.x_max)
+        y_bottom = min(bbox1.y_max, bbox2.y_max)
+
+        if x_right < x_left or y_bottom < y_top:
+            return 0.0
+
+        intersection = (x_right - x_left) * (y_bottom - y_top)
+        area1 = bbox1.width * bbox1.height
+        area2 = bbox2.width * bbox2.height
+        union = area1 + area2 - intersection
+
+        return intersection / union if union > 0 else 0.0
+
+    def _remove_overlapping_items(self, items: list[DetectedItem], iou_threshold: float = 0.7) -> list[DetectedItem]:
+        """
+        Remove overlapping items, keeping the one with higher confidence.
+        top/outerwear가 같은 영역에서 감지되면 하나만 유지.
+        """
+        if len(items) <= 1:
+            return items
+
+        # confidence 기준 내림차순 정렬
+        sorted_items = sorted(items, key=lambda x: x.confidence, reverse=True)
+        kept_items = []
+
+        for item in sorted_items:
+            is_overlapping = False
+            for kept in kept_items:
+                iou = self._calculate_iou(item.bbox, kept.bbox)
+                if iou > iou_threshold:
+                    is_overlapping = True
+                    break
+            if not is_overlapping:
+                kept_items.append(item)
+
+        return kept_items
 
     def _map_to_fashion_category(self, label: str) -> Optional[str]:
         """
