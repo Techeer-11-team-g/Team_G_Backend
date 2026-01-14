@@ -7,7 +7,7 @@ from .serializers import FittingImageSerializer, FittingStatusSerializer
 from .tasks import process_fitting_task
 
 class FittingRequestView(APIView):
-   def post(self, request):
+    def post(self, request):
         # 1. 시리얼라이저로 데이터 검증 (product, user_image 존재 여부 등 체크)
         serializer = FittingImageSerializer(data=request.data)
         
@@ -15,9 +15,8 @@ class FittingRequestView(APIView):
             # 2. DB 레코드 생성 (상태는 PENDING)
             fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
             
-            # 3. 프론트에서 보낸 user_image_url을 꺼내서 Celery에 함께 전달
-            user_image_url = request.data.get('user_image_url')
-            process_fitting_task.delay(fitting.id, user_image_url)
+            # 3. Celery 태스크 실행 (fitting_id만 전달, 나머지는 DB에서 조회)
+            process_fitting_task.delay(fitting.id)
             
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         
