@@ -21,4 +21,5 @@ cryptography==42.0.5
 transformers==4.47.1
 torch==2.2.2
 httpx>=0.25.0,<0.28.0
+fashion-clip==0.2.2
 

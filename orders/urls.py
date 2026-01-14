@@ -7,4 +7,4 @@ router.register('orders', OrderViewSet, basename='order')
 
 urlpatterns = [
     path('', include(router.urls)),
-]
+] 
