@@ -12,6 +12,8 @@ class OrderSerializer(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         # Rename 'id' to 'order_id' as per requirement(아이디를 오더 아이디로 변경)
         ret['order_id'] = ret.pop('id')
+        first_item = instance.order_items.first()
+        ret['order_status'] = first_item.order_status if first_item else None
         return ret 
 
 
@@ -22,6 +24,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         allow_empty=False
     )
     user_id = serializers.IntegerField(write_only=True)
+    payment_method = serializers.CharField(write_only=True)
     
     class Meta:
         model = Order
@@ -83,7 +86,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
                     product_item=item.selected_product,
                     purchased_quantity=item.quantity,
                     price_at_order=item.selected_product.product.selling_price,
-                    order_status=Order.OrderStatus.PAID 
+                    order_status=OrderItem.OrderStatus.PAID # Order에서 OrderItem으로 변경(Order에는 order_status가 없고 OrderItem에는 order_status가 있다)
                 )) 
             OrderItem.objects.bulk_create(order_items)
 
