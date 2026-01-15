@@ -5,6 +5,8 @@ OpenSearch client configuration.
 from opensearchpy import OpenSearch
 from django.conf import settings
 
+from services.metrics import record_api_call
+
 
 def get_opensearch_client() -> OpenSearch:
     """
@@ -532,7 +534,8 @@ class OpenSearchService:
             try:
                 import numpy as np
 
-                attr_response = self.client.search(index=index_name, body=filter_query)
+                with record_api_call('opensearch'):
+                    attr_response = self.client.search(index=index_name, body=filter_query)
                 filter_desc = []
                 if normalized_brand:
                     filter_desc.append(f"brand='{brand}'")
@@ -586,7 +589,8 @@ class OpenSearchService:
             }
         }
 
-        vector_response = self.client.search(index=index_name, body=vector_query)
+        with record_api_call('opensearch'):
+            vector_response = self.client.search(index=index_name, body=vector_query)
 
         vector_results = []
         for hit in vector_response['hits']['hits']:

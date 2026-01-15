@@ -12,6 +12,8 @@ from django.conf import settings
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 
+from services.metrics import record_api_call, DETECTED_OBJECTS_TOTAL
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,7 +146,8 @@ class VisionService:
 
         try:
             # Object localization for bounding boxes
-            response = self.client.object_localization(image=image)
+            with record_api_call('google_vision'):
+                response = self.client.object_localization(image=image)
 
             if response.error.message:
                 logger.error(f"Vision API error: {response.error.message}")
@@ -175,6 +178,11 @@ class VisionService:
             # 겹치는 bbox 제거 (IoU > 0.7이면 confidence 높은 것만 유지)
             filtered_list = self._remove_overlapping_items(result_list)
             logger.info(f"Detected {len(filtered_list)} unique fashion items")
+
+            # Record detected objects metrics
+            for item in filtered_list:
+                DETECTED_OBJECTS_TOTAL.labels(category=item.category).inc()
+
             return filtered_list
 
         except Exception as e:
