@@ -35,6 +35,14 @@ from services.vision_service import get_vision_service, DetectedItem
 from services.embedding_service import get_embedding_service
 from services.opensearch_client import OpenSearchService
 from services.redis_service import get_redis_service
+from services.metrics import (
+    ANALYSIS_TOTAL,
+    ANALYSIS_DURATION,
+    ANALYSIS_IN_PROGRESS,
+    ANALYSES_COMPLETED_TOTAL,
+    PRODUCT_MATCHES_TOTAL,
+    push_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +113,7 @@ def process_image_analysis(
         Analysis result dict
     """
     redis_service = get_redis_service()
+    ANALYSIS_IN_PROGRESS.inc()
 
     try:
         # Update status to RUNNING
@@ -113,11 +122,13 @@ def process_image_analysis(
 
         # Step 1: Download image from GCS
         redis_service.set_analysis_progress(analysis_id, 10)
-        image_bytes = _download_image(image_url)
+        with ANALYSIS_DURATION.labels(stage='download_image').time():
+            image_bytes = _download_image(image_url)
 
         # Step 2: Detect objects with Vision API (외부 API 호출)
         redis_service.set_analysis_progress(analysis_id, 20)
-        detected_items = _detect_objects(image_bytes)
+        with ANALYSIS_DURATION.labels(stage='detect_objects').time():
+            detected_items = _detect_objects(image_bytes)
         logger.info(f"Detected {len(detected_items)} items")
 
         if not detected_items:
@@ -257,13 +268,29 @@ def analysis_complete_callback(
 
         # DB에 결과 저장
         redis_service.set_analysis_progress(analysis_id, 90)
-        _save_analysis_results(analysis_id, valid_results, user_id)
+        with ANALYSIS_DURATION.labels(stage='save_results').time():
+            _save_analysis_results(analysis_id, valid_results, user_id)
 
         # 완료 상태 업데이트
         redis_service.update_analysis_done(analysis_id, {'items': valid_results})
         _update_analysis_status_db(analysis_id, 'DONE')
 
+        # Metrics: 분석 완료
+        ANALYSIS_TOTAL.labels(status='success').inc()
+        ANALYSES_COMPLETED_TOTAL.inc()
+        ANALYSIS_IN_PROGRESS.dec()
+
+        # Metrics: 매칭된 상품 수
+        for result in valid_results:
+            category = result.get('category', 'unknown')
+            match_count = len(result.get('matches', []))
+            for _ in range(match_count):
+                PRODUCT_MATCHES_TOTAL.labels(category=category).inc()
+
         logger.info(f"Analysis {analysis_id} completed: {len(valid_results)}/{total_items} items processed")
+
+        # Celery 워커 메트릭을 Pushgateway로 푸시
+        push_metrics()
 
         return {
             'analysis_id': analysis_id,
@@ -276,6 +303,14 @@ def analysis_complete_callback(
         logger.error(f"Failed to complete analysis {analysis_id}: {e}")
         redis_service.update_analysis_failed(analysis_id, str(e))
         _update_analysis_status_db(analysis_id, 'FAILED')
+
+        # Metrics: 분석 실패
+        ANALYSIS_TOTAL.labels(status='failed').inc()
+        ANALYSIS_IN_PROGRESS.dec()
+
+        # 실패 시에도 메트릭 푸시
+        push_metrics()
+
         return {
             'analysis_id': analysis_id,
             'status': 'FAILED',
@@ -417,10 +452,11 @@ def _process_detected_item(
         from services.gpt4v_service import get_gpt4v_service
         try:
             gpt4v_service = get_gpt4v_service()
-            attributes = gpt4v_service.extract_attributes(
-                image_bytes=cropped_bytes,
-                category=detected_item.category,
-            )
+            with ANALYSIS_DURATION.labels(stage='extract_attributes').time():
+                attributes = gpt4v_service.extract_attributes(
+                    image_bytes=cropped_bytes,
+                    category=detected_item.category,
+                )
             logger.info(f"Item {item_index} - GPT-4V attributes: color={attributes.color}, secondary_color={attributes.secondary_color}, brand={attributes.brand}")
         except Exception as e:
             logger.warning(f"GPT-4V extraction failed: {e}")
@@ -428,7 +464,8 @@ def _process_detected_item(
 
         # Step 4: Generate embedding
         embedding_service = get_embedding_service()
-        embedding = embedding_service.get_image_embedding(cropped_bytes)
+        with ANALYSIS_DURATION.labels(stage='generate_embedding').time():
+            embedding = embedding_service.get_image_embedding(cropped_bytes)
 
         # Step 5: Search similar products
         # Vision API 카테고리 → OpenSearch 카테고리 매핑
@@ -447,24 +484,26 @@ def _process_detected_item(
 
         if detected_brand or detected_color:
             logger.info(f"Item {item_index} - Using attribute search (brand={detected_brand}, color={detected_color}, secondary={detected_secondary})")
-            search_results = opensearch_service.search_with_attributes(
-                embedding=embedding,
-                category=search_category,
-                brand=detected_brand,
-                color=detected_color,
-                secondary_color=detected_secondary,
-                k=30,
-                search_k=400,
-            )
+            with ANALYSIS_DURATION.labels(stage='search_products').time():
+                search_results = opensearch_service.search_with_attributes(
+                    embedding=embedding,
+                    category=search_category,
+                    brand=detected_brand,
+                    color=detected_color,
+                    secondary_color=detected_secondary,
+                    k=30,
+                    search_k=400,
+                )
         else:
             # 속성 없으면 기존 하이브리드 검색
             logger.info(f"Item {item_index} - No attributes, using hybrid search")
-            search_results = opensearch_service.search_similar_products_hybrid(
-                embedding=embedding,
-                category=search_category,
-                k=30,
-                search_k=400,
-            )
+            with ANALYSIS_DURATION.labels(stage='search_products').time():
+                search_results = opensearch_service.search_similar_products_hybrid(
+                    embedding=embedding,
+                    category=search_category,
+                    k=30,
+                    search_k=400,
+                )
 
         if not search_results:
             logger.warning(f"No matching products found for item {item_index}")
@@ -474,11 +513,12 @@ def _process_detected_item(
         from services.gpt4v_service import get_gpt4v_service
         try:
             gpt4v_service = get_gpt4v_service()
-            search_results = gpt4v_service.rerank_products(
-                query_image_bytes=cropped_bytes,
-                candidates=search_results[:10],  # 상위 10개만 리랭킹
-                top_k=5,
-            )
+            with ANALYSIS_DURATION.labels(stage='rerank_products').time():
+                search_results = gpt4v_service.rerank_products(
+                    query_image_bytes=cropped_bytes,
+                    candidates=search_results[:10],  # 상위 10개만 리랭킹
+                    top_k=5,
+                )
             logger.info(f"Item {item_index} - Claude reranking completed")
         except Exception as e:
             logger.warning(f"Claude reranking failed, using original results: {e}")

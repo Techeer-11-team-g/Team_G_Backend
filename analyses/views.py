@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 
+from services.metrics import IMAGES_UPLOADED_TOTAL
 from .models import UploadedImage, ImageAnalysis, ObjectProductMapping, DetectedObject
 from .serializers import (
     UploadedImageCreateSerializer,
@@ -89,6 +90,7 @@ class UploadedImageView(APIView):
             ).get(timeout=60)  # 60초 타임아웃
 
             logger.info(f"Image uploaded via Celery: {result.get('uploaded_image_id')}")
+            IMAGES_UPLOADED_TOTAL.inc()
 
             return Response(result, status=status.HTTP_201_CREATED)
 

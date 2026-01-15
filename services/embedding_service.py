@@ -10,10 +10,13 @@ https://huggingface.co/Marqo/marqo-fashionCLIP
 import io
 import logging
 import platform
+import time
 from typing import Optional
 
 import torch
 from PIL import Image
+
+from services.metrics import EXTERNAL_API_DURATION
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +63,7 @@ class EmbeddingService:
         Returns:
             512-dimensional embedding vector
         """
+        start_time = time.time()
         try:
             # Load image from bytes
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -87,6 +91,9 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed to generate image embedding: {e}")
             raise
+        finally:
+            duration = time.time() - start_time
+            EXTERNAL_API_DURATION.labels(service='fashionclip').observe(duration)
 
     def get_text_embedding(self, text: str) -> list[float]:
         """

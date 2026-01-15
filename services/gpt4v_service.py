@@ -20,6 +20,8 @@ from typing import Optional
 import anthropic
 from django.conf import settings
 
+from services.metrics import record_api_call
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,29 +96,30 @@ Important:
                 prompt = f"This is a {category} item.\n\n" + prompt
 
             # Call Claude 3.5 Sonnet
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=500,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/jpeg",
-                                    "data": base64_image,
+            with record_api_call('claude_vision'):
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=500,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/jpeg",
+                                        "data": base64_image,
+                                    }
+                                },
+                                {
+                                    "type": "text",
+                                    "text": prompt
                                 }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ],
-            )
+                            ]
+                        }
+                    ],
+                )
 
             # Parse response
             content = response.content[0].text
@@ -217,29 +220,30 @@ Candidates:
 Return ONLY the ranking as comma-separated numbers (e.g., "3,1,5,2,4").
 Most similar first. Only include the numbers, no explanation."""
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=100,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/jpeg",
-                                    "data": query_base64,
+            with record_api_call('claude_rerank'):
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=100,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/jpeg",
+                                        "data": query_base64,
+                                    }
+                                },
+                                {
+                                    "type": "text",
+                                    "text": prompt
                                 }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ],
-            )
+                            ]
+                        }
+                    ],
+                )
 
             # 응답 파싱
             ranking_text = response.content[0].text.strip()
