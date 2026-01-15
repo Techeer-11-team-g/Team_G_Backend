@@ -109,6 +109,7 @@ from services import OpenSearchService
 | `langchain_service` | LangChain + GPT - 자연어 재분석 쿼리 파싱 |
 | `fashn_service` | fashn.ai - 가상 피팅 이미지 생성 |
 | `redis_service` | 분석 상태 관리 (PENDING/RUNNING/DONE/FAILED) |
+| `metrics` | Prometheus 커스텀 메트릭 (`record_api_call`, `push_metrics`) |
 
 ### Celery 태스크 (`analyses/tasks/`)
 
@@ -137,10 +138,106 @@ analyses/tasks/
 
 ## 서비스 포트
 
-| 서비스 | 포트 |
-|---------|------|
-| Django | 8000 |
-| MySQL | 3306 |
-| Redis | 6379 |
-| RabbitMQ | 5672, 15672 (관리) |
-| OpenSearch | 9200 |
+| 서비스 | 포트 | 용도 |
+|---------|------|------|
+| Django | 8000 | 웹 API |
+| MySQL | 3306 | 메인 DB |
+| Redis | 6379 | 캐시/Celery 결과 |
+| RabbitMQ | 5672, 15672 | 메시지 브로커, 관리 UI |
+| OpenSearch | 9200 | 벡터 검색 |
+| Prometheus | 9090 | 메트릭 저장소 |
+| Grafana | 3000 | 통합 대시보드 |
+| Pushgateway | 9091 | Celery 메트릭 push |
+| Loki | 3100 | 로그 저장소 |
+| Jaeger | 16686, 6831 | 트레이스 UI, 수집 |
+
+## Observability (모니터링)
+
+3가지 관측 데이터를 Grafana에서 통합 조회:
+- **Metrics** (Prometheus): 수치 지표 (처리량, 응답시간, 에러율)
+- **Logs** (Loki): 애플리케이션 로그
+- **Traces** (Jaeger): 분산 트레이싱 (요청 흐름 추적)
+
+### 로컬 서비스 실행
+
+```bash
+# Homebrew로 설치된 서비스
+brew services start prometheus
+brew services start grafana
+
+# 바이너리 직접 실행 (~/bin에 설치됨)
+~/bin/loki -config.file=$HOME/bin/config/loki-config.yaml &
+~/bin/jaeger-all-in-one &
+~/bin/pushgateway &
+```
+
+### 환경 변수 (`.env`)
+
+```bash
+# Loki (로그)
+LOKI_URL=http://localhost:3100/loki/api/v1/push
+LOKI_ENABLED=true
+
+# Jaeger (트레이싱)
+JAEGER_HOST=localhost
+JAEGER_PORT=6831
+TRACING_ENABLED=true
+```
+
+### 주요 파일
+
+| 파일 | 용도 |
+|------|------|
+| `config/tracing.py` | OpenTelemetry 초기화 |
+| `config/settings.py` | Loki 로그 핸들러 설정 |
+| `config/celery.py` | Celery 워커 트레이싱 |
+| `config/wsgi.py` | Django 웹 서버 트레이싱 |
+| `services/metrics.py` | Prometheus 커스텀 메트릭 |
+
+### Grafana 대시보드
+
+- **URL**: http://localhost:3000 (admin/admin)
+- **대시보드**: Team G - Full Observability Dashboard
+
+| 섹션 | 내용 |
+|------|------|
+| Analysis Overview | 분석 수, 성공률, 진행 중, 감지 객체 수 |
+| Performance Metrics | 파이프라인 단계별 소요시간, API 레이턴시 |
+| Distributed Traces | 요청별 트레이스 (Jaeger) |
+| Application Logs | 실시간 로그, 에러 로그 (Loki) |
+
+### 커스텀 메트릭 (`services/metrics.py`)
+
+```python
+from services.metrics import record_api_call, ANALYSIS_DURATION, push_metrics
+
+# 외부 API 호출 계측
+with record_api_call('google_vision'):
+    response = vision_client.detect_objects(image)
+
+# 파이프라인 단계별 시간 측정
+with ANALYSIS_DURATION.labels(stage='detect_objects').time():
+    items = detect_objects(image)
+
+# Celery 태스크 완료 후 Pushgateway로 push
+push_metrics()
+```
+
+### 주요 메트릭
+
+| 메트릭 | 설명 |
+|--------|------|
+| `teamg_analysis_total{status}` | 분석 완료 수 (success/failed) |
+| `teamg_analysis_duration_seconds{stage}` | 단계별 소요시간 |
+| `teamg_external_api_requests_total{service,status}` | 외부 API 호출 수 |
+| `teamg_external_api_duration_seconds{service}` | 외부 API 응답시간 |
+| `teamg_detected_objects_total{category}` | 카테고리별 감지 객체 수 |
+| `teamg_product_matches_total{category}` | 카테고리별 매칭 상품 수 |
+
+### 트레이싱 자동 계측
+
+OpenTelemetry로 다음이 자동 계측됨:
+- Django HTTP 요청/응답
+- Celery 태스크 실행
+- requests 라이브러리 (외부 API 호출)
+- 로그에 trace_id 자동 주입
