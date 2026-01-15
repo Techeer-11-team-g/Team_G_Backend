@@ -11,7 +11,7 @@ class OrderSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         ret = super().to_representation(instance)
         # Rename 'id' to 'order_id' as per requirement(아이디를 오더 아이디로 변경)
-        ret['order_id'] = ret.pop('id') 
+        ret['order_id'] = ret.pop('id')
         first_item = instance.order_items.first()
         ret['order_status'] = first_item.order_status if first_item else None
         return ret 
@@ -25,7 +25,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     )
     user_id = serializers.IntegerField(write_only=True)
     payment_method = serializers.CharField(write_only=True)
-    
+     
     class Meta:
         model = Order
         fields = ['cart_item_ids', 'user_id', 'id', 'total_price', 'delivery_address', 'created_at']
