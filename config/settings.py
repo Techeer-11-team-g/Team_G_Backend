@@ -162,21 +162,18 @@ CACHES = {
 # =============================================================================
 
 # Broker - RabbitMQ (primary) or Redis (fallback)
-CELERY_BROKER_URL = os.getenv(
-    'CELERY_BROKER_URL',
-    f'amqp://{os.getenv("RABBITMQ_USER", "guest")}:{os.getenv("RABBITMQ_PASSWORD", "guest")}@{os.getenv("RABBITMQ_HOST", "localhost")}:{os.getenv("RABBITMQ_PORT", "5672")}//'
-)
+CELERY_BROKER_URL = 'amqp://guest:guest@localhost:5672//'
 
 # Result backend - Redis
-CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL)
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
+CELERY_TIMEZONE = 'Asia/Seoul'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
-
+CELERY_TASK_ALWAYS_EAGER = False
 
 # =============================================================================
 # OpenSearch Configuration
@@ -194,6 +191,7 @@ OPENSEARCH_USE_SSL = os.getenv('OPENSEARCH_USE_SSL', 'False').lower() == 'true'
 # =============================================================================
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 LANGCHAIN_TRACING_V2 = os.getenv('LANGCHAIN_TRACING_V2', 'false')
 LANGCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY', '')
 
