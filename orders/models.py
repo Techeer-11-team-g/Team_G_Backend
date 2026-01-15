@@ -13,7 +13,7 @@ class CartItem(models.Model):
         on_delete=models.CASCADE,
         related_name='cart_items',
         db_column='user_id',
-        verbose_name='사용자',
+        verbose_name='사용자', 
     )
 
     selected_product = models.ForeignKey(
@@ -59,6 +59,7 @@ class Order(models.Model):
     ERD: order
     주문 기본 정보
     """
+    
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -66,7 +67,7 @@ class Order(models.Model):
         related_name='orders',
         db_column='user_id',
         verbose_name='사용자',
-    )
+    ) 
 
     total_price = models.PositiveIntegerField(
         default=0,
@@ -75,7 +76,7 @@ class Order(models.Model):
 
     delivery_address = models.TextField(
         verbose_name='배송 주소',
-    )
+    ) 
 
     created_at = models.DateTimeField(
         auto_now_add=True,
@@ -125,13 +126,13 @@ class OrderItem(models.Model):
         verbose_name='주문',
     )
 
-    product_item = models.ForeignKey(
+    selected_product = models.ForeignKey(
         'analyses.SelectedProduct',
         on_delete=models.SET_NULL,
         null=True,
         related_name='order_items',
-        db_column='product_item_id',
-        verbose_name='상품 아이템',
+        db_column='selected_product_id',
+        verbose_name='선택된 상품',
     )
 
     purchased_quantity = models.PositiveIntegerField(
@@ -178,4 +179,4 @@ class OrderItem(models.Model):
     @property
     def subtotal(self):
         """해당 주문 항목의 소계"""
-        return self.price_at_order * self.purchased_quantity
+        return self.price_at_order * self.purchased_quantity 

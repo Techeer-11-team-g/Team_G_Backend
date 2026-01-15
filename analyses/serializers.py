@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import UploadedImage, ImageAnalysis
+from .models import UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping
+from products.models import Product
 
 
 class UploadedImageCreateSerializer(serializers.ModelSerializer):
@@ -171,3 +172,345 @@ class ImageAnalysisStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = ImageAnalysis
         fields = ['analysis_id', 'status', 'progress', 'updated_at']
+
+
+# =============================================================================
+# 이미지 분석 결과 조회용 Serializers
+# GET /api/v1/analyses/{analysis_id}
+# =============================================================================
+
+class ProductSerializer(serializers.ModelSerializer):
+    """
+    상품 정보 Serializer
+    분석 결과에서 매칭된 상품 정보를 표시
+    """
+    image_url = serializers.CharField(source='product_image_url')
+
+    class Meta:
+        model = Product
+        fields = ['id', 'brand_name', 'product_name', 'selling_price', 'image_url', 'product_url']
+
+
+class MatchSerializer(serializers.ModelSerializer):
+    """
+    검출 객체-상품 매핑 Serializer
+    OpenSearch k-NN 검색으로 찾은 유사 상품 정보
+    """
+    product_id = serializers.IntegerField(source='product.id')
+    product = ProductSerializer()
+
+    class Meta:
+        model = ObjectProductMapping
+        fields = ['product_id', 'product']
+
+
+class DetectedObjectResultSerializer(serializers.ModelSerializer):
+    """
+    검출된 객체 결과 Serializer
+    bbox, 카테고리, 매칭된 상품 정보 포함
+    """
+    detected_object_id = serializers.IntegerField(source='id')
+    category_name = serializers.CharField(source='object_category')
+    bbox = serializers.SerializerMethodField()
+    match = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DetectedObject
+        fields = ['detected_object_id', 'category_name', 'bbox', 'match']
+
+    def get_bbox(self, obj):
+        """Bounding box 좌표 반환"""
+        return {
+            'x1': round(obj.bbox_x1, 2),
+            'x2': round(obj.bbox_x2, 2),
+            'y1': round(obj.bbox_y1, 2),
+            'y2': round(obj.bbox_y2, 2),
+        }
+
+    def get_match(self, obj):
+        """가장 높은 신뢰도의 매칭 상품 반환"""
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if mapping:
+            return MatchSerializer(mapping).data
+        return None
+
+
+class UploadedImageInfoSerializer(serializers.ModelSerializer):
+    """
+    업로드된 이미지 정보 (결과 조회용)
+    """
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UploadedImage
+        fields = ['id', 'url']
+
+    def get_url(self, obj):
+        if obj.uploaded_image_url:
+            return obj.uploaded_image_url.url
+        return ''
+
+
+class ImageAnalysisResultSerializer(serializers.ModelSerializer):
+    """
+    이미지 분석 결과 조회 응답용 Serializer
+    GET /api/v1/analyses/{analysis_id}
+    분석 완료 후 검출된 객체들과 매칭된 상품 정보를 반환
+    """
+    analysis_id = serializers.IntegerField(source='id')
+    uploaded_image = UploadedImageInfoSerializer()
+    status = serializers.CharField(source='image_analysis_status')
+    items = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImageAnalysis
+        fields = ['analysis_id', 'uploaded_image', 'status', 'items']
+
+    def get_items(self, obj):
+        """분석된 이미지의 검출된 객체 목록 반환"""
+        detected_objects = obj.uploaded_image.detected_objects.filter(is_deleted=False)
+        return DetectedObjectResultSerializer(detected_objects, many=True).data
+
+
+# =============================================================================
+# API 6: 자연어 기반 결과 수정
+# PATCH /api/v1/analyses
+# =============================================================================
+
+class AnalysisRefineRequestSerializer(serializers.Serializer):
+    """
+    자연어 기반 결과 수정 요청 Serializer
+    PATCH /api/v1/analyses
+    """
+    analysis_id = serializers.IntegerField()
+    query = serializers.CharField(help_text='자연어 검색 쿼리 (예: "상의만 다시 검색해줘")')
+    detected_object_id = serializers.IntegerField(required=False, help_text='특정 객체만 재검색할 경우')
+
+    def validate_analysis_id(self, value):
+        try:
+            ImageAnalysis.objects.get(id=value, is_deleted=False)
+        except ImageAnalysis.DoesNotExist:
+            raise serializers.ValidationError('존재하지 않는 분석입니다.')
+        return value
+
+    def validate_detected_object_id(self, value):
+        if value:
+            try:
+                DetectedObject.objects.get(id=value, is_deleted=False)
+            except DetectedObject.DoesNotExist:
+                raise serializers.ValidationError('존재하지 않는 객체입니다.')
+        return value
+
+
+class AnalysisRefineImageSerializer(serializers.ModelSerializer):
+    """API 6 응답용 이미지 정보"""
+    uploaded_image_id = serializers.IntegerField(source='id')
+    uploaded_image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UploadedImage
+        fields = ['uploaded_image_id', 'uploaded_image_url']
+
+    def get_uploaded_image_url(self, obj):
+        if obj.uploaded_image_url:
+            return obj.uploaded_image_url.url
+        return ''
+
+
+class AnalysisRefineItemSerializer(serializers.ModelSerializer):
+    """API 6 응답용 검출 객체 Serializer"""
+    detected_object_id = serializers.IntegerField(source='id')
+    category_name = serializers.CharField(source='object_category')
+    confidence_score = serializers.SerializerMethodField()
+    bbox = serializers.SerializerMethodField()
+    match = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DetectedObject
+        fields = ['detected_object_id', 'category_name', 'confidence_score', 'bbox', 'match']
+
+    def get_confidence_score(self, obj):
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if mapping:
+            return round(mapping.confidence_score, 4)
+        return 0.0
+
+    def get_bbox(self, obj):
+        return {
+            'x1': round(obj.bbox_x1, 2),
+            'x2': round(obj.bbox_x2, 2),
+            'y1': round(obj.bbox_y1, 2),
+            'y2': round(obj.bbox_y2, 2),
+        }
+
+    def get_match(self, obj):
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if mapping:
+            product = mapping.product
+            return {
+                'product_id': product.id,
+                'product': {
+                    'id': product.id,
+                    'brand_name': product.brand_name,
+                    'product_name': product.product_name,
+                    'selling_price': product.selling_price,
+                    'image_url': product.product_image_url,
+                    'product_url': product.product_url,
+                }
+            }
+        return None
+
+
+class AnalysisRefineResponseSerializer(serializers.ModelSerializer):
+    """
+    자연어 기반 결과 수정 응답 Serializer
+    PATCH /api/v1/analyses Response
+    """
+    analysis_id = serializers.IntegerField(source='id')
+    status = serializers.CharField(source='image_analysis_status')
+    image = AnalysisRefineImageSerializer(source='uploaded_image')
+    items = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ImageAnalysis
+        fields = ['analysis_id', 'status', 'image', 'items']
+
+    def get_items(self, obj):
+        detected_objects = obj.uploaded_image.detected_objects.filter(is_deleted=False)
+        return AnalysisRefineItemSerializer(detected_objects, many=True).data
+
+
+# =============================================================================
+# API 10: 통합 히스토리 조회
+# GET /api/v1/uploaded-images/{uploaded_image_id}
+# =============================================================================
+
+class FittingInfoSerializer(serializers.Serializer):
+    """피팅 이미지 정보 Serializer"""
+    fitting_image_id = serializers.IntegerField()
+    fitting_image_url = serializers.CharField()
+
+
+class HistoryMatchSerializer(serializers.Serializer):
+    """
+    통합 히스토리 조회용 매칭 정보 Serializer
+    product + fitting 정보 포함
+    """
+    product_id = serializers.IntegerField()
+    product = serializers.SerializerMethodField()
+    fitting = serializers.SerializerMethodField()
+
+    def __init__(self, *args, **kwargs):
+        self.mapping = kwargs.pop('mapping', None)
+        super().__init__(*args, **kwargs)
+
+    def get_product(self, obj):
+        product = obj
+        return {
+            'id': product.id,
+            'brand_name': product.brand_name,
+            'product_name': product.product_name,
+            'selling_price': product.selling_price,
+            'image_url': product.product_image_url,
+            'product_url': product.product_url,
+        }
+
+    def get_fitting(self, obj):
+        """해당 상품에 대한 피팅 이미지 조회"""
+        from fittings.models import FittingImage
+
+        # 완료된 피팅 이미지 중 가장 최신 것 반환
+        fitting = FittingImage.objects.filter(
+            product=obj,
+            fitting_image_status='DONE',
+            is_deleted=False
+        ).order_by('-created_at').first()
+
+        if fitting and fitting.fitting_image_url:
+            return {
+                'fitting_image_id': fitting.id,
+                'fitting_image_url': fitting.fitting_image_url,
+            }
+        return None
+
+
+class HistoryItemSerializer(serializers.ModelSerializer):
+    """
+    통합 히스토리 조회용 검출 객체 Serializer
+    피팅 정보 포함
+    """
+    detected_object_id = serializers.IntegerField(source='id')
+    category_name = serializers.CharField(source='object_category')
+    confidence_score = serializers.SerializerMethodField()
+    bbox = serializers.SerializerMethodField()
+    match = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DetectedObject
+        fields = ['detected_object_id', 'category_name', 'confidence_score', 'bbox', 'match']
+
+    def get_confidence_score(self, obj):
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if mapping:
+            return round(mapping.confidence_score, 4)
+        return 0.0
+
+    def get_bbox(self, obj):
+        return {
+            'x1': round(obj.bbox_x1, 2),
+            'x2': round(obj.bbox_x2, 2),
+            'y1': round(obj.bbox_y1, 2),
+            'y2': round(obj.bbox_y2, 2),
+        }
+
+    def get_match(self, obj):
+        """매칭된 상품 + 피팅 정보 반환"""
+        from fittings.models import FittingImage
+
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if not mapping:
+            return None
+
+        product = mapping.product
+
+        # 피팅 이미지 조회
+        fitting_data = None
+        fitting = FittingImage.objects.filter(
+            product=product,
+            fitting_image_status='DONE',
+            is_deleted=False
+        ).order_by('-created_at').first()
+
+        if fitting and fitting.fitting_image_url:
+            fitting_data = {
+                'fitting_image_id': fitting.id,
+                'fitting_image_url': fitting.fitting_image_url,
+            }
+
+        return {
+            'product_id': product.id,
+            'product': {
+                'id': product.id,
+                'brand_name': product.brand_name,
+                'product_name': product.product_name,
+                'selling_price': product.selling_price,
+                'image_url': product.product_image_url,
+                'product_url': product.product_url,
+            },
+            'fitting': fitting_data,
+        }
+
+
+class UploadedImageHistoryResponseSerializer(serializers.Serializer):
+    """
+    통합 히스토리 조회 응답 Serializer
+    GET /api/v1/uploaded-images/{uploaded_image_id}
+    """
+    items = serializers.SerializerMethodField()
+
+    def __init__(self, *args, **kwargs):
+        self.detected_objects = kwargs.pop('detected_objects', [])
+        super().__init__(*args, **kwargs)
+
+    def get_items(self, obj):
+        return HistoryItemSerializer(self.detected_objects, many=True).data

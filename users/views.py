@@ -29,13 +29,15 @@ class UserMeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-
+        """사용자 정보 조회"""
         serializer = UserProfileSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request):
-
-
+        """사용자 정보 수정"""
+        # 수정 시에도 UserProfileSerializer를 사용할지, 별도 Serializer를 사용할지 결정 필요
+        # 명세에 따라 UserProfileSerializer를 재사용하거나 필요한 경우 분리
+        # 여기서는 조회와 동일한 필드를 반환하고, 수정은 partial=True로 처리
         serializer = UserProfileSerializer(
             instance=request.user,
             data=request.data,

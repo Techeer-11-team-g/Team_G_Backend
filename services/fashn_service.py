@@ -3,13 +3,16 @@ fashn.ai API Service for virtual fitting.
 Generates virtual try-on images using fashn.ai API.
 """
 
+import base64
 import logging
+import mimetypes
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 import requests
 from django.conf import settings
+from django.db.models.fields.files import FieldFile
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,90 @@ class FashnService:
         self.timeout = 30
         self.poll_interval = 2  # seconds
         self.max_poll_attempts = 60  # 2 minutes max
+
+    def _to_image_data(self, image_source: Union[str, FieldFile]) -> str:
+        """
+        Convert image source to a format acceptable by fashn.ai API.
+        
+        Supports:
+        - URL string (http/https) - returned as-is
+        - Base64 string (data:image/...) - returned as-is
+        - File path string - converted to base64
+        - Django FieldFile/ImageField - converted to base64
+        
+        Args:
+            image_source: URL, base64 string, file path, or FieldFile
+            
+        Returns:
+            URL or base64 data URI string
+        """
+        # If it's a FieldFile (ImageField), get the file path
+        if isinstance(image_source, FieldFile):
+            if not image_source:
+                raise ValueError("ImageField is empty")
+            image_source = image_source.path
+        
+        # Convert to string
+        image_str = str(image_source)
+        
+        # Already a URL or base64
+        if image_str.startswith(('http://', 'https://', 'data:image/')):
+            return image_str
+        
+        # Local file path - convert to base64
+        return self._file_to_base64(image_str)
+    
+    def _file_to_base64(self, file_path: str) -> str:
+        """
+        Convert local file to base64 data URI.
+        
+        Args:
+            file_path: Path to the image file
+            
+        Returns:
+            Base64 data URI string (data:image/jpeg;base64,...)
+        """
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if not mime_type:
+            mime_type = 'image/jpeg'
+        
+        with open(file_path, 'rb') as f:
+            encoded = base64.b64encode(f.read()).decode('utf-8')
+        
+        return f"data:{mime_type};base64,{encoded}"
+
+    def create_fitting_with_files(
+        self,
+        model_image: Union[str, FieldFile],
+        garment_image: Union[str, FieldFile],
+        category: str = 'tops',
+    ) -> 'FittingResult':
+        """
+        Create a virtual fitting request with file support.
+        
+        Accepts URLs, file paths, or Django ImageField objects.
+        Local files are automatically converted to base64.
+        
+        Args:
+            model_image: URL, file path, or ImageField of the model/person
+            garment_image: URL, file path, or ImageField of the garment
+            category: Garment category (tops, bottoms, one-pieces)
+            
+        Returns:
+            FittingResult with job ID
+        """
+        try:
+            model_data = self._to_image_data(model_image)
+            garment_data = self._to_image_data(garment_image)
+        except Exception as e:
+            logger.error(f"Failed to prepare image data: {e}")
+            return FittingResult(
+                id='',
+                status='error',
+                error=f'Image preparation failed: {e}',
+            )
+        
+        return self.create_fitting(model_data, garment_data, category)
 
     def create_fitting(
         self,

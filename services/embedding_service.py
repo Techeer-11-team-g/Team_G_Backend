@@ -1,52 +1,131 @@
 """
-OpenAI Embeddings Service for vector generation.
-Generates embeddings for images and text using OpenAI API.
+Marqo-FashionCLIP Embeddings Service for image vector generation.
+Generates embeddings directly from images using Marqo-FashionCLIP model.
+Uses float64 on Apple Silicon to avoid numerical precision issues.
+
+Marqo-FashionCLIP: +57% improvement over FashionCLIP 2.0 (Aug 2024)
+https://huggingface.co/Marqo/marqo-fashionCLIP
 """
 
-import base64
+import io
 import logging
-from io import BytesIO
+import platform
+import time
 from typing import Optional
 
-from django.conf import settings
-from openai import OpenAI
+import torch
+from PIL import Image
+
+from services.metrics import EXTERNAL_API_DURATION
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """OpenAI Embeddings service for vector generation."""
+    """Marqo-FashionCLIP-based image embedding service for vector generation."""
 
-    # Default model for text embeddings
-    TEXT_EMBEDDING_MODEL = "text-embedding-3-small"
-    # Vision model for image understanding
-    VISION_MODEL = "gpt-4o-mini"
-    # Embedding dimensions
-    EMBEDDING_DIMENSIONS = 1536
+    # Marqo-FashionCLIP model (outputs 512 dimensions, +57% vs FashionCLIP 2.0)
+    CLIP_MODEL = "hf-hub:Marqo/marqo-fashionCLIP"
+    # Embedding dimensions (same as FashionCLIP - compatible with existing DB)
+    EMBEDDING_DIMENSIONS = 512
 
     def __init__(self):
-        api_key = getattr(settings, 'OPENAI_API_KEY', '')
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not configured")
+        import open_clip
 
-        self.client = OpenAI(api_key=api_key)
+        logger.info(f"Loading Marqo-FashionCLIP model: {self.CLIP_MODEL}")
+
+        # Load model using open_clip
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(self.CLIP_MODEL)
+        self.tokenizer = open_clip.get_tokenizer(self.CLIP_MODEL)
+
+        # Check if running on Apple Silicon (M1/M2/M3)
+        self.use_float64 = (
+            platform.system() == "Darwin" and
+            platform.processor() == "arm"
+        )
+
+        if self.use_float64:
+            logger.info("Apple Silicon detected - using float64 for numerical stability")
+            self.model = self.model.double()
+
+        # Set to evaluation mode
+        self.model.eval()
+
+        logger.info("Marqo-FashionCLIP model loaded successfully")
+
+    def get_image_embedding(self, image_bytes: bytes) -> list[float]:
+        """
+        Generate embedding directly from image using Marqo-FashionCLIP.
+
+        Args:
+            image_bytes: Raw image bytes
+
+        Returns:
+            512-dimensional embedding vector
+        """
+        start_time = time.time()
+        try:
+            # Load image from bytes
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+            # Preprocess image
+            image_tensor = self.preprocess(image).unsqueeze(0)
+
+            # Convert to float64 if on Apple Silicon
+            if self.use_float64:
+                image_tensor = image_tensor.double()
+
+            # Generate embedding
+            with torch.no_grad():
+                image_features = self.model.encode_image(image_tensor)
+
+            # Normalize the embedding
+            image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
+
+            # Convert to float32 list for compatibility
+            embedding = image_features.squeeze().float().tolist()
+
+            logger.info(f"Generated image embedding: {len(embedding)} dimensions")
+            return embedding
+
+        except Exception as e:
+            logger.error(f"Failed to generate image embedding: {e}")
+            raise
+        finally:
+            duration = time.time() - start_time
+            EXTERNAL_API_DURATION.labels(service='fashionclip').observe(duration)
 
     def get_text_embedding(self, text: str) -> list[float]:
         """
-        Generate embedding for text.
+        Generate embedding from text using Marqo-FashionCLIP.
+        Useful for text-based product search.
 
         Args:
             text: Text to embed
 
         Returns:
-            Embedding vector
+            512-dimensional embedding vector
         """
         try:
-            response = self.client.embeddings.create(
-                model=self.TEXT_EMBEDDING_MODEL,
-                input=text,
-            )
-            embedding = response.data[0].embedding
+            # Tokenize text
+            text_tokens = self.tokenizer([text])
+
+            # For Apple Silicon, text encoding needs special handling
+            if self.use_float64:
+                self.model.float()
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
+                self.model.double()
+            else:
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
+
+            # Normalize the embedding
+            text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+
+            # Convert to float32 list for compatibility
+            embedding = text_features.squeeze().float().tolist()
+
             logger.info(f"Generated text embedding: {len(embedding)} dimensions")
             return embedding
 
@@ -54,110 +133,86 @@ class EmbeddingService:
             logger.error(f"Failed to generate text embedding: {e}")
             raise
 
-    def get_image_embedding(self, image_bytes: bytes) -> list[float]:
+    def get_batch_text_embeddings(self, texts: list[str]) -> list[list[float]]:
         """
-        Generate embedding for image using GPT-4 Vision + text embedding.
-
-        Process:
-        1. Use GPT-4 Vision to describe the image in detail
-        2. Generate text embedding from the description
-
-        Args:
-            image_bytes: Raw image bytes
-
-        Returns:
-            Embedding vector
-        """
-        try:
-            # Step 1: Get image description using Vision
-            description = self._describe_image(image_bytes)
-
-            # Step 2: Generate embedding from description
-            embedding = self.get_text_embedding(description)
-
-            logger.info("Generated image embedding via description")
-            return embedding
-
-        except Exception as e:
-            logger.error(f"Failed to generate image embedding: {e}")
-            raise
-
-    def _describe_image(self, image_bytes: bytes) -> str:
-        """
-        Generate detailed description of image using GPT-4 Vision.
-
-        Args:
-            image_bytes: Raw image bytes
-
-        Returns:
-            Detailed description of the image
-        """
-        # Encode image to base64
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-
-        try:
-            response = self.client.chat.completions.create(
-                model=self.VISION_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a fashion item descriptor. Describe the fashion item "
-                            "in the image with specific details about: color, material, style, "
-                            "pattern, brand indicators, and any distinguishing features. "
-                            "Be specific and detailed for accurate product matching."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}",
-                                    "detail": "high"
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": "Describe this fashion item in detail."
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=300,
-            )
-
-            description = response.choices[0].message.content
-            logger.info(f"Image description: {description[:100]}...")
-            return description
-
-        except Exception as e:
-            logger.error(f"Failed to describe image: {e}")
-            raise
-
-    def get_batch_embeddings(self, texts: list[str]) -> list[list[float]]:
-        """
-        Generate embeddings for multiple texts.
+        Generate embeddings for multiple texts in a single batch.
+        Much faster than calling get_text_embedding multiple times.
 
         Args:
             texts: List of texts to embed
 
         Returns:
-            List of embedding vectors
+            List of 512-dimensional embedding vectors
         """
-        try:
-            response = self.client.embeddings.create(
-                model=self.TEXT_EMBEDDING_MODEL,
-                input=texts,
-            )
+        if not texts:
+            return []
 
-            embeddings = [data.embedding for data in response.data]
-            logger.info(f"Generated {len(embeddings)} embeddings")
+        try:
+            # Tokenize all texts at once
+            text_tokens = self.tokenizer(texts)
+
+            # For Apple Silicon, text encoding needs special handling
+            if self.use_float64:
+                self.model.float()
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
+                self.model.double()
+            else:
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
+
+            # Normalize embeddings
+            text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+
+            # Convert to list of lists
+            embeddings = text_features.float().tolist()
+
+            logger.info(f"Generated {len(embeddings)} text embeddings in batch")
             return embeddings
 
         except Exception as e:
-            logger.error(f"Failed to generate batch embeddings: {e}")
+            logger.error(f"Failed to generate batch text embeddings: {e}")
+            return []
+
+    def get_batch_image_embeddings(self, image_bytes_list: list[bytes]) -> list[list[float]]:
+        """
+        Generate embeddings for multiple images.
+
+        Args:
+            image_bytes_list: List of raw image bytes
+
+        Returns:
+            List of 512-dimensional embedding vectors
+        """
+        try:
+            # Load and preprocess all images
+            images = []
+            for img_bytes in image_bytes_list:
+                image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                images.append(self.preprocess(image))
+
+            # Stack into batch tensor
+            image_tensor = torch.stack(images)
+
+            # Convert to float64 if on Apple Silicon
+            if self.use_float64:
+                image_tensor = image_tensor.double()
+
+            # Generate embeddings
+            with torch.no_grad():
+                image_features = self.model.encode_image(image_tensor)
+
+            # Normalize embeddings
+            image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
+
+            # Convert to float32 list of lists for compatibility
+            embeddings = image_features.float().tolist()
+
+            logger.info(f"Generated {len(embeddings)} image embeddings")
+            return embeddings
+
+        except Exception as e:
+            logger.error(f"Failed to generate batch image embeddings: {e}")
             raise
 
 

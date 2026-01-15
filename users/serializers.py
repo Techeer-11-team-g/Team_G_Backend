@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 
 class UserOnboardingSerializer(serializers.ModelSerializer):
-   
+    # 프론트에서 user_email로 보낸다니 source를 이용해 매핑 가능
     user_email = serializers.EmailField(source='email', required=True)
 
     class Meta:

@@ -51,6 +51,8 @@ celerybeat.pid
 *-credentials.json
 *-service-account.json
 gcs-*.json
+credentials/
+*.json
 
 # Docker (선택 - 로컬 볼륨 데이터)
 # docker-compose.override.yml
@@ -69,3 +71,25 @@ htmlcov/
 # Google Cloud
 keys/
 *.json
+
+# Credentials
+credentials/
+*.json
+
+# Local scripts (not for production)
+import_products.py
+FASHIONCLIP_MIGRATION.md
+
+# Test files
+test_pipeline.py
+test_*.py
+
+# Documentation (local only)
+docs/
+
+# Crash dumps
+erl_crash.dump
+*.dump
+
+# Temp/explain files
+explain.txt
