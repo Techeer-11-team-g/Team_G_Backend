@@ -211,12 +211,19 @@ class DetectedObjectResultSerializer(serializers.ModelSerializer):
     """
     detected_object_id = serializers.IntegerField(source='id')
     category_name = serializers.CharField(source='object_category')
+    confidence_score = serializers.SerializerMethodField()
     bbox = serializers.SerializerMethodField()
     match = serializers.SerializerMethodField()
 
     class Meta:
         model = DetectedObject
-        fields = ['detected_object_id', 'category_name', 'bbox', 'match']
+        fields = ['detected_object_id', 'category_name','confidence_score', 'bbox', 'match']
+
+    def get_confidence_score(self, obj):  
+        mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+        if mapping:
+            return round(mapping.confidence_score, 4)
+        return 0.0
 
     def get_bbox(self, obj):
         """Bounding box 좌표 반환"""
