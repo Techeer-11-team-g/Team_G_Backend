@@ -162,7 +162,7 @@ CACHES = {
 # =============================================================================
 
 # Broker - RabbitMQ (primary) or Redis (fallback)
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_BROKER_URL = 'amqp://guest:guest@localhost:5672//'
 
 # Result backend - Redis
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
