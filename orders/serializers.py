@@ -12,6 +12,8 @@ class OrderSerializer(serializers.ModelSerializer):
         ret = super().to_representation(instance)
         # Rename 'id' to 'order_id' as per requirement(아이디를 오더 아이디로 변경)
         ret['order_id'] = ret.pop('id')
+        first_item = instance.order_items.first()
+        ret['order_status'] = first_item.order_status if first_item else None
         return ret 
 
 class OrderItemDetailSerializer(serializers.ModelSerializer):
@@ -51,7 +53,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
         allow_empty=False
     )
     user_id = serializers.IntegerField(write_only=True)
-    
+    payment_method = serializers.CharField(write_only=True)
+     
     class Meta:
         model = Order
         fields = ['cart_item_ids', 'user_id', 'id', 'total_price', 'delivery_address', 'created_at']
@@ -112,8 +115,8 @@ class OrderCreateSerializer(serializers.ModelSerializer):
                     selected_product=item.selected_product,
                     purchased_quantity=item.quantity,
                     price_at_order=item.selected_product.product.selling_price,
-                    order_status=OrderItem.OrderStatus.PAID
-                ))
+                    order_status=OrderItem.OrderStatus.PAID 
+                )) 
             OrderItem.objects.bulk_create(order_items)
 
             # 장바구니 항목 삭제 (Soft Delete)
