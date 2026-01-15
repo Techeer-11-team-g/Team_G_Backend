@@ -5,21 +5,31 @@ Pipeline:
 1. Receive image analysis request
 2. Google Vision API for object detection (bbox)
 3. Crop detected items with padding
-4. Generate embeddings using FashionCLIP (병렬 처리)
-5. Hybrid search in OpenSearch (k-NN + keyword) (병렬 처리)
-6. BLIP + CLIP re-ranking for better accuracy (병렬 처리)
-7. Save results to MySQL
-8. Update status in Redis
+4. Upload cropped images to GCS
+5. Extract attributes with Claude Haiku (병렬 처리)
+6. Generate embeddings using FashionCLIP (병렬 처리)
+7. Hybrid search in OpenSearch (k-NN + keyword) (병렬 처리)
+8. Claude Haiku reranking (병렬 처리)
+9. Save results to MySQL
+10. Update status in Redis
+
+비동기 처리:
+- RabbitMQ: 메시지 브로커로 태스크 큐잉
+- Celery Group: 여러 객체를 병렬로 처리
+- Redis: 진행 상태 및 결과 캐싱
 """
 
 import io
 import base64
 import logging
+import uuid
+from datetime import datetime
 from typing import Optional
 
 from celery import shared_task, chord
 from django.conf import settings
 from PIL import Image
+from google.cloud import storage
 
 from services.vision_service import get_vision_service, DetectedItem
 from services.embedding_service import get_embedding_service
@@ -27,6 +37,50 @@ from services.opensearch_client import OpenSearchService
 from services.redis_service import get_redis_service
 
 logger = logging.getLogger(__name__)
+
+
+def _upload_to_gcs(image_bytes: bytes, analysis_id: str, item_index: int, category: str) -> Optional[str]:
+    """
+    Upload cropped image to GCS.
+
+    Args:
+        image_bytes: Cropped image bytes
+        analysis_id: Analysis job ID
+        item_index: Item index
+        category: Item category
+
+    Returns:
+        GCS public URL or None if upload fails
+    """
+    try:
+        bucket_name = settings.GCS_BUCKET_NAME
+        credentials_file = settings.GCS_CREDENTIALS_FILE
+
+        if not bucket_name or not credentials_file:
+            logger.warning("GCS not configured, skipping upload")
+            return None
+
+        # Create storage client
+        client = storage.Client.from_service_account_json(credentials_file)
+        bucket = client.bucket(bucket_name)
+
+        # Generate unique filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"cropped/{analysis_id}/{timestamp}_{item_index}_{category}.jpg"
+
+        # Upload
+        blob = bucket.blob(filename)
+        blob.upload_from_string(image_bytes, content_type='image/jpeg')
+
+        # Return public URL
+        gcs_url = f"https://storage.googleapis.com/{bucket_name}/{filename}"
+        logger.info(f"Uploaded cropped image to GCS: {gcs_url}")
+
+        return gcs_url
+
+    except Exception as e:
+        logger.error(f"Failed to upload to GCS: {e}")
+        return None
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -128,9 +182,9 @@ def process_single_item(
     단일 검출 객체 처리 태스크 (병렬 실행됨).
 
     외부 API 호출:
+    - Claude Vision: 속성 추출 (color, brand, style)
     - FashionCLIP: 이미지 임베딩 생성
     - OpenSearch: k-NN 하이브리드 검색
-    - BLIP+CLIP: 리랭킹
 
     Args:
         analysis_id: Analysis job ID
@@ -333,10 +387,10 @@ def _process_detected_item(
     Process a single detected item.
 
     1. Crop the item from image
-    2. Upload cropped image to GCS
-    3. Generate embedding
-    4. Search similar products
-    5. Evaluate with LangChain
+    2. Upload to GCS
+    3. Extract attributes with Claude Vision (color, brand, etc.)
+    4. Generate embedding
+    5. Search similar products (with attribute filtering)
 
     Args:
         analysis_id: Analysis job ID
@@ -351,11 +405,32 @@ def _process_detected_item(
         # Step 1: Crop image and get pixel bbox
         cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
 
-        # Step 2: Generate embedding
+        # Step 2: Upload cropped image to GCS
+        cropped_image_url = _upload_to_gcs(
+            image_bytes=cropped_bytes,
+            analysis_id=analysis_id,
+            item_index=item_index,
+            category=detected_item.category,
+        )
+
+        # Step 3: Extract attributes with GPT-4V
+        from services.gpt4v_service import get_gpt4v_service
+        try:
+            gpt4v_service = get_gpt4v_service()
+            attributes = gpt4v_service.extract_attributes(
+                image_bytes=cropped_bytes,
+                category=detected_item.category,
+            )
+            logger.info(f"Item {item_index} - GPT-4V attributes: color={attributes.color}, secondary_color={attributes.secondary_color}, brand={attributes.brand}")
+        except Exception as e:
+            logger.warning(f"GPT-4V extraction failed: {e}")
+            attributes = None
+
+        # Step 4: Generate embedding
         embedding_service = get_embedding_service()
         embedding = embedding_service.get_image_embedding(cropped_bytes)
 
-        # Step 3: Search similar products
+        # Step 5: Search similar products
         # Vision API 카테고리 → OpenSearch 카테고리 매핑
         category_mapping = {
             'bottom': 'pants',
@@ -364,32 +439,49 @@ def _process_detected_item(
         search_category = category_mapping.get(detected_item.category, detected_item.category)
 
         opensearch_service = OpenSearchService()
-        # 1차: 하이브리드 검색으로 후보 30개 가져오기
-        search_results = opensearch_service.search_similar_products_hybrid(
-            embedding=embedding,
-            category=search_category,
-            k=30,
-            search_k=100,
-        )
+
+        # 브랜드 또는 색상이 감지되면 속성 기반 검색, 아니면 하이브리드 검색
+        detected_brand = attributes.brand if attributes else None
+        detected_color = attributes.color if attributes else None
+        detected_secondary = attributes.secondary_color if attributes else None
+
+        if detected_brand or detected_color:
+            logger.info(f"Item {item_index} - Using attribute search (brand={detected_brand}, color={detected_color}, secondary={detected_secondary})")
+            search_results = opensearch_service.search_with_attributes(
+                embedding=embedding,
+                category=search_category,
+                brand=detected_brand,
+                color=detected_color,
+                secondary_color=detected_secondary,
+                k=30,
+                search_k=400,
+            )
+        else:
+            # 속성 없으면 기존 하이브리드 검색
+            logger.info(f"Item {item_index} - No attributes, using hybrid search")
+            search_results = opensearch_service.search_similar_products_hybrid(
+                embedding=embedding,
+                category=search_category,
+                k=30,
+                search_k=400,
+            )
 
         if not search_results:
             logger.warning(f"No matching products found for item {item_index}")
             return None
 
-        # 2차: BLIP + CLIP 리랭킹
-        from services.blip_service import get_blip_service
+        # Claude 리랭킹으로 정확도 향상
+        from services.gpt4v_service import get_gpt4v_service
         try:
-            blip_service = get_blip_service()
-            search_results = blip_service.rerank_products(
-                image_bytes=cropped_bytes,
-                candidates=search_results,
+            gpt4v_service = get_gpt4v_service()
+            search_results = gpt4v_service.rerank_products(
+                query_image_bytes=cropped_bytes,
+                candidates=search_results[:10],  # 상위 10개만 리랭킹
                 top_k=5,
-                image_embedding=embedding,  # CLIP cross-encoder용
-                category=detected_item.category,  # 카테고리별 프롬프트용
             )
-            logger.info(f"Item {item_index} - BLIP + CLIP re-ranking completed")
+            logger.info(f"Item {item_index} - Claude reranking completed")
         except Exception as e:
-            logger.warning(f"BLIP re-ranking failed, using original results: {e}")
+            logger.warning(f"Claude reranking failed, using original results: {e}")
             search_results = search_results[:5]
 
         # 상위 5개 매칭 결과 반환
@@ -403,13 +495,28 @@ def _process_detected_item(
                 'price': match.get('price'),
             })
 
-        return {
+        # 결과에 추출된 속성 정보 포함
+        result = {
             'index': item_index,
             'category': detected_item.category,
             'bbox': pixel_bbox,
             'confidence': detected_item.confidence,
+            'cropped_image_url': cropped_image_url,  # GCS URL
             'matches': top_matches,  # 상위 5개
         }
+
+        # GPT-4V 속성 추가 (있으면)
+        if attributes:
+            result['attributes'] = {
+                'color': attributes.color,
+                'secondary_color': attributes.secondary_color,
+                'brand': attributes.brand,
+                'material': attributes.material,
+                'style': attributes.style,
+                'pattern': attributes.pattern,
+            }
+
+        return result
 
     except Exception as e:
         logger.error(f"Failed to process item {item_index}: {e}")

@@ -79,3 +79,17 @@ credentials/
 # Local scripts (not for production)
 import_products.py
 FASHIONCLIP_MIGRATION.md
+
+# Test files
+test_pipeline.py
+test_*.py
+
+# Documentation (local only)
+docs/
+
+# Crash dumps
+erl_crash.dump
+*.dump
+
+# Temp/explain files
+explain.txt
