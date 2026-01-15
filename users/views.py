@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 
-from .serializers import UserOnboardingSerializer
+from .serializers import UserOnboardingSerializer, UserProfileSerializer
 
 
 class UserOnboardingView(APIView):
@@ -22,4 +22,29 @@ class UserOnboardingView(APIView):
             return Response(
                 serializer.data,
                 status=status.HTTP_200_OK
-            )s
+            )
+
+
+class UserMeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+
+
+        serializer = UserProfileSerializer(
+            instance=request.user,
+            data=request.data,
+            partial=True
+        )
+        
+        if serializer.is_valid(raise_exception=True):
+            serializer.save()
+            return Response(
+                serializer.data,
+                status=status.HTTP_200_OK
+            )
