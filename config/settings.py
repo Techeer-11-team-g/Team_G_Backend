@@ -191,6 +191,7 @@ OPENSEARCH_USE_SSL = os.getenv('OPENSEARCH_USE_SSL', 'False').lower() == 'true'
 # =============================================================================
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 LANGCHAIN_TRACING_V2 = os.getenv('LANGCHAIN_TRACING_V2', 'false')
 LANGCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY', '')
 
