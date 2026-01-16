@@ -12,7 +12,7 @@ class UserImageUploadSerializer(serializers.ModelSerializer):
     user_image_id = serializers.IntegerField(source='id', read_only=True)
     user_image_url = serializers.SerializerMethodField(read_only=True)
     created_at = serializers.DateTimeField(format="%Y-%m-%dT%H:%M:%SZ", read_only=True)
-    
+
     # Request 필드 (파일 업로드)
     file = serializers.ImageField(write_only=True)
 
@@ -45,10 +45,7 @@ class UserImageUploadSerializer(serializers.ModelSerializer):
         """사용자 이미지 저장"""
         file = validated_data.pop('file')
         request = self.context.get('request')
-        
-        user = None
-        if request and request.user.is_authenticated:
-            user = request.user
+        user = request.user  # JWT 인증된 유저
 
         user_image = UserImage.objects.create(
             user=user,
@@ -61,17 +58,17 @@ class FittingImageSerializer(serializers.ModelSerializer):
     """
     가상 피팅 요청용 Serializer
     POST /api/v1/fitting-images - 가상 피팅 요청
-    
+
     user_image_url: 이미 업로드된 사용자 이미지의 URL을 받아서 처리
     """
     # Response 필드들 (read_only)
     fitting_image_id = serializers.IntegerField(source='id', read_only=True)
-    fitting_image_status = serializers.CharField(source='fitting_image_status', read_only=True)
+    fitting_image_status = serializers.CharField(read_only=True)
     fitting_image_url = serializers.URLField(read_only=True)
     polling = serializers.SerializerMethodField(read_only=True)
     completed_at = serializers.DateTimeField(
-        source='updated_at', 
-        format="%Y-%m-%dT%H:%M:%SZ", 
+        source='updated_at',
+        format="%Y-%m-%dT%H:%M:%SZ",
         read_only=True
     )
 
@@ -105,7 +102,7 @@ class FittingImageSerializer(serializers.ModelSerializer):
         # URL로 기존 UserImage 찾기
         # URL 끝부분만 비교 (전체 URL 또는 상대 경로 모두 지원)
         user_images = UserImage.objects.filter(is_deleted=False)
-        
+
         for user_image in user_images:
             if user_image.user_image_url:
                 stored_url = str(user_image.user_image_url)
@@ -116,7 +113,7 @@ class FittingImageSerializer(serializers.ModelSerializer):
                 if hasattr(user_image.user_image_url, 'url'):
                     if user_image.user_image_url.url == value or value.endswith(user_image.user_image_url.url):
                         return user_image
-        
+
         raise serializers.ValidationError('존재하지 않는 사용자 이미지 URL입니다. 먼저 /api/v1/user-images 에서 이미지를 업로드하세요.')
 
     def create(self, validated_data):

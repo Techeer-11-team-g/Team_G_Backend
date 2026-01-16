@@ -1,12 +1,9 @@
 """
-fashn.ai API Service for virtual fitting.
-Generates virtual try-on images using fashn.ai API.
+The New Black Virtual Try-On API Service.
+Supports virtual try-on for clothes, bags, and shoes.
 """
 
-import base64
 import logging
-import mimetypes
-import time
 from dataclasses import dataclass
 from typing import Optional, Union
 
@@ -25,268 +22,162 @@ class FittingResult:
     output_url: Optional[str] = None
     error: Optional[str] = None
 
-    def to_dict(self) -> dict:
-        return {
-            'id': self.id,
-            'status': self.status,
-            'output_url': self.output_url,
-            'error': self.error,
-        }
-
 
 class FashnService:
-    """fashn.ai API service for virtual fitting."""
+    """The New Black Virtual Try-On API service."""
 
-    BASE_URL = "https://api.fashn.ai/v1"
+    BASE_URL = "https://thenewblack.ai/api/1.1/wf"
+
+    ENDPOINTS = {
+        'upper_body': 'vto',
+        'lower_body': 'vto',
+        'dresses': 'vto',
+        'top': 'vto',
+        'bottom': 'vto',
+        'bag': 'vto-bag',
+        'shoes': 'vto-shoes',
+    }
+
+    PARAM_CONFIG = {
+        'vto': {
+            'model_param': 'model_photo',
+            'item_param': 'clothing_photo',
+            'extra': {'ratio': 'auto', 'prompt': 'virtual try on'},
+            'has_description': True,
+        },
+        'vto-bag': {
+            'model_param': 'model_photo',
+            'item_param': 'bag_photo',
+            'extra': {},
+            'has_description': True,
+        },
+        'vto-shoes': {
+            'model_param': 'model_photo',
+            'item_param': 'shoes_photo',
+            'extra': {},
+            'has_description': True,
+        },
+    }
 
     def __init__(self):
-        self.api_key = getattr(settings, 'FASHN_API_KEY', '')
+        self.api_key = getattr(settings, 'THENEWBLACK_API_KEY', '')
         if not self.api_key:
-            logger.warning("FASHN_API_KEY not configured")
+            logger.warning("THENEWBLACK_API_KEY not configured")
+        self.timeout = 120
 
-        self.headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json',
-        }
-        self.timeout = 30
-        self.poll_interval = 2  # seconds
-        self.max_poll_attempts = 60  # 2 minutes max
-
-    def _to_image_data(self, image_source: Union[str, FieldFile]) -> str:
-        """
-        Convert image source to a format acceptable by fashn.ai API.
-        
-        Supports:
-        - URL string (http/https) - returned as-is
-        - Base64 string (data:image/...) - returned as-is
-        - File path string - converted to base64
-        - Django FieldFile/ImageField - converted to base64
-        
-        Args:
-            image_source: URL, base64 string, file path, or FieldFile
-            
-        Returns:
-            URL or base64 data URI string
-        """
-        # If it's a FieldFile (ImageField), get the file path
+    def _to_image_url(self, image_source: Union[str, FieldFile]) -> str:
+        """Convert image source to URL."""
         if isinstance(image_source, FieldFile):
             if not image_source:
                 raise ValueError("ImageField is empty")
-            image_source = image_source.path
-        
-        # Convert to string
+            image_source = image_source.url
+
         image_str = str(image_source)
-        
-        # Already a URL or base64
-        if image_str.startswith(('http://', 'https://', 'data:image/')):
+        if image_str.startswith(('http://', 'https://')):
             return image_str
-        
-        # Local file path - convert to base64
-        return self._file_to_base64(image_str)
-    
-    def _file_to_base64(self, file_path: str) -> str:
-        """
-        Convert local file to base64 data URI.
-        
-        Args:
-            file_path: Path to the image file
-            
-        Returns:
-            Base64 data URI string (data:image/jpeg;base64,...)
-        """
-        mime_type, _ = mimetypes.guess_type(file_path)
-        if not mime_type:
-            mime_type = 'image/jpeg'
-        
-        with open(file_path, 'rb') as f:
-            encoded = base64.b64encode(f.read()).decode('utf-8')
-        
-        return f"data:{mime_type};base64,{encoded}"
+
+        raise ValueError(f"Invalid image source: {image_str}. Must be a URL.")
+
+    def _get_endpoint_config(self, category: str) -> tuple:
+        """Get endpoint and config for category."""
+        endpoint = self.ENDPOINTS.get(category, 'vto')
+        config = self.PARAM_CONFIG.get(endpoint, self.PARAM_CONFIG['vto'])
+        return endpoint, config
 
     def create_fitting_with_files(
         self,
         model_image: Union[str, FieldFile],
         garment_image: Union[str, FieldFile],
-        category: str = 'tops',
-    ) -> 'FittingResult':
-        """
-        Create a virtual fitting request with file support.
-        
-        Accepts URLs, file paths, or Django ImageField objects.
-        Local files are automatically converted to base64.
-        
-        Args:
-            model_image: URL, file path, or ImageField of the model/person
-            garment_image: URL, file path, or ImageField of the garment
-            category: Garment category (tops, bottoms, one-pieces)
-            
-        Returns:
-            FittingResult with job ID
-        """
+        category: str = 'top',
+        garment_description: str = '',
+    ) -> FittingResult:
+        """Create a virtual fitting request."""
         try:
-            model_data = self._to_image_data(model_image)
-            garment_data = self._to_image_data(garment_image)
+            model_url = self._to_image_url(model_image)
+            garment_url = self._to_image_url(garment_image)
         except Exception as e:
             logger.error(f"Failed to prepare image data: {e}")
-            return FittingResult(
-                id='',
-                status='error',
-                error=f'Image preparation failed: {e}',
-            )
-        
-        return self.create_fitting(model_data, garment_data, category)
+            return FittingResult(id='', status='error', error=f'Image preparation failed: {e}')
+
+        return self.create_fitting(model_url, garment_url, category, garment_description)
 
     def create_fitting(
         self,
         model_image_url: str,
         product_image_url: str,
-        category: str = 'tops',
+        category: str = 'top',
+        garment_description: str = '',
     ) -> FittingResult:
-        """
-        Create a virtual fitting request.
+        """Create a virtual fitting request (synchronous)."""
+        endpoint_name, config = self._get_endpoint_config(category)
+        url = f"{self.BASE_URL}/{endpoint_name}?api_key={self.api_key}"
 
-        Args:
-            model_image_url: URL of the model/person image
-            product_image_url: URL of the garment image
-            category: Garment category (tops, bottoms, one-pieces)
-
-        Returns:
-            FittingResult with job ID
-        """
-        endpoint = f"{self.BASE_URL}/run"
-
-        payload = {
-            'model_image': model_image_url,
-            'garment_image': product_image_url,
-            'category': category,
+        form_data = {
+            config['model_param']: (None, model_image_url),
+            config['item_param']: (None, product_image_url),
         }
 
+        for key, value in config.get('extra', {}).items():
+            form_data[key] = (None, value)
+
+        if config.get('has_description'):
+            form_data['description'] = (None, garment_description or 'fashion item')
+
         try:
-            response = requests.post(
-                endpoint,
-                json=payload,
-                headers=self.headers,
-                timeout=self.timeout,
-            )
+            logger.info(f"The New Black request: endpoint={endpoint_name}")
+
+            response = requests.post(url, files=form_data, timeout=self.timeout)
             response.raise_for_status()
 
-            data = response.json()
-            logger.info(f"Created fitting job: {data.get('id')}")
+            output_url = response.text.strip()
+            if output_url.startswith('http'):
+                logger.info(f"The New Black completed: {output_url[:80]}...")
+                return FittingResult(id='tnb-sync', status='completed', output_url=output_url)
 
-            return FittingResult(
-                id=data.get('id', ''),
-                status=data.get('status', 'pending'),
-            )
+            logger.warning(f"The New Black unexpected response: {output_url[:200]}")
+            return FittingResult(id='', status='error', error=f'Unexpected response: {output_url[:200]}')
 
+        except requests.exceptions.Timeout:
+            logger.error("The New Black request timed out")
+            return FittingResult(id='', status='error', error='Request timed out')
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to create fitting: {e}")
-            return FittingResult(
-                id='',
-                status='error',
-                error=str(e),
-            )
-
-    def get_fitting_status(self, job_id: str) -> FittingResult:
-        """
-        Get the status of a fitting job.
-
-        Args:
-            job_id: The fitting job ID
-
-        Returns:
-            FittingResult with current status
-        """
-        endpoint = f"{self.BASE_URL}/status/{job_id}"
-
-        try:
-            response = requests.get(
-                endpoint,
-                headers=self.headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-
-            data = response.json()
-
-            return FittingResult(
-                id=job_id,
-                status=data.get('status', 'unknown'),
-                output_url=data.get('output'),
-                error=data.get('error'),
-            )
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to get fitting status: {e}")
-            return FittingResult(
-                id=job_id,
-                status='error',
-                error=str(e),
-            )
-
-    def create_fitting_and_wait(
-        self,
-        model_image_url: str,
-        garment_image_url: str,
-        category: str = 'tops',
-    ) -> FittingResult:
-        """
-        Create a fitting and wait for completion.
-
-        Args:
-            model_image_url: URL of the model/person image
-            garment_image_url: URL of the garment image
-            category: Garment category
-
-        Returns:
-            FittingResult with output URL when complete
-        """
-        # Create the fitting job
-        result = self.create_fitting(model_image_url, garment_image_url, category)
-
-        if result.status == 'error':
-            return result
-
-        # Poll for completion
-        for _ in range(self.max_poll_attempts):
-            time.sleep(self.poll_interval)
-
-            result = self.get_fitting_status(result.id)
-
-            if result.status == 'completed':
-                logger.info(f"Fitting completed: {result.id}")
-                return result
-            elif result.status == 'error':
-                logger.error(f"Fitting failed: {result.error}")
-                return result
-
-        # Timeout
-        return FittingResult(
-            id=result.id,
-            status='timeout',
-            error='Fitting job timed out',
-        )
+            error_detail = str(e)
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                except:
+                    error_detail = e.response.text
+            return FittingResult(id='', status='error', error=str(error_detail))
 
     def map_category(self, detected_category: str) -> str:
-        """
-        Map detected category to fashn.ai category.
+        """Map detected category to The New Black category."""
+        if not detected_category:
+            return 'top'
 
-        Args:
-            detected_category: Category from Vision API
-
-        Returns:
-            fashn.ai compatible category
-        """
         mapping = {
-            'top': 'tops',
-            'bottom': 'bottoms',
-            'dress': 'one-pieces',
-            'outerwear': 'tops',  # Treated as tops in fashn.ai
-            'skirt': 'bottoms',
+            'top': 'top',
+            'bottom': 'bottom',
+            'pants': 'bottom',
+            'dress': 'dresses',
+            'dresses': 'dresses',
+            'outer': 'top',
+            'outerwear': 'top',
+            'skirt': 'bottom',
+            'upper_body': 'top',
+            'lower_body': 'bottom',
+            'bag': 'bag',
+            'bags': 'bag',
+            'handbag': 'bag',
+            'shoes': 'shoes',
+            'shoe': 'shoes',
+            'sneakers': 'shoes',
+            'boots': 'shoes',
+            'hat': 'top',
         }
-        return mapping.get(detected_category, 'tops')
+        return mapping.get(detected_category.lower(), 'top')
 
 
-# Singleton instance
 _fashn_service: Optional[FashnService] = None
 
 

@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third party
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     'django_prometheus',
     'storages',
     'corsheaders',
@@ -197,10 +198,10 @@ LANGCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY', '')
 
 
 # =============================================================================
-# fashn.ai Configuration
+# The New Black Virtual Try-On Configuration
 # =============================================================================
 
-FASHN_API_KEY = os.getenv('FASHN_API_KEY', '')
+THENEWBLACK_API_KEY = os.getenv('THENEWBLACK_API_KEY', '')
 
 
 # =============================================================================
@@ -219,10 +220,27 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+}
+
+
+# =============================================================================
+# JWT Settings
+# =============================================================================
+
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
 }
 
 
@@ -241,7 +259,7 @@ if GCS_BUCKET_NAME and GCS_CREDENTIALS_FILE and os.path.exists(GCS_CREDENTIALS_F
     GS_BUCKET_NAME = GCS_BUCKET_NAME
     GS_PROJECT_ID = GCS_PROJECT_ID
     GS_CREDENTIALS = service_account.Credentials.from_service_account_file(GCS_CREDENTIALS_FILE)
-    GS_DEFAULT_ACL = None  # uniform bucket-level access 사용시 ACL 비활성화
+    GS_DEFAULT_ACL = 'publicRead'  # 파일을 공개로 설정 (The New Black API 접근용)
     GS_QUERYSTRING_AUTH = False
 
 MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
@@ -328,3 +346,14 @@ LOGGING = {
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
