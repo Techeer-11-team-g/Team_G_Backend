@@ -4,7 +4,7 @@ import uuid
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 
 from services.metrics import IMAGES_UPLOADED_TOTAL
@@ -40,7 +40,7 @@ class UploadedImageView(APIView):
     GET /api/v1/uploaded-images - 업로드 이력 조회
     """
     parser_classes = [MultiPartParser, FormParser]
-    permission_classes = [AllowAny]  # 일단 누구나 접근 가능하게
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         """
@@ -147,7 +147,7 @@ class ImageAnalysisView(APIView):
     POST /api/v1/analyses - 이미지 분석 시작
     PATCH /api/v1/analyses - 자연어 기반 결과 수정
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def patch(self, request):
         """
@@ -325,7 +325,7 @@ class AnalysisRefineStatusView(APIView):
 
     GET /api/v1/analyses/{analysis_id}/refine-status?refine_id={refine_id}
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, analysis_id):
         """
@@ -382,7 +382,7 @@ class ImageAnalysisStatusView(APIView):
 
     GET /api/v1/analyses/{analysis_id}/status
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, analysis_id):
         """
@@ -422,7 +422,7 @@ class ImageAnalysisResultView(APIView):
 
     GET /api/v1/analyses/{analysis_id}
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, analysis_id):
         """
@@ -462,7 +462,7 @@ class UploadedImageHistoryView(APIView):
     업로드된 이미지에 대한 검출 객체, 매칭 상품, 피팅 정보를 통합 조회합니다.
     DB 조회만 수행하므로 외부 API 호출이 없어 비동기 처리가 필요하지 않습니다.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, uploaded_image_id):
         """

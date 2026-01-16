@@ -477,33 +477,24 @@ def _process_detected_item(
 
         opensearch_service = OpenSearchService()
 
-        # 브랜드 또는 색상이 감지되면 속성 기반 검색, 아니면 하이브리드 검색
+        # 벡터 검색 → 브랜드/색상 부스팅 방식
         detected_brand = attributes.brand if attributes else None
         detected_color = attributes.color if attributes else None
         detected_secondary = attributes.secondary_color if attributes else None
+        detected_item_type = attributes.item_type if attributes else None
 
-        if detected_brand or detected_color:
-            logger.info(f"Item {item_index} - Using attribute search (brand={detected_brand}, color={detected_color}, secondary={detected_secondary})")
-            with ANALYSIS_DURATION.labels(stage='search_products').time():
-                search_results = opensearch_service.search_with_attributes(
-                    embedding=embedding,
-                    category=search_category,
-                    brand=detected_brand,
-                    color=detected_color,
-                    secondary_color=detected_secondary,
-                    k=30,
-                    search_k=400,
-                )
-        else:
-            # 속성 없으면 기존 하이브리드 검색
-            logger.info(f"Item {item_index} - No attributes, using hybrid search")
-            with ANALYSIS_DURATION.labels(stage='search_products').time():
-                search_results = opensearch_service.search_similar_products_hybrid(
-                    embedding=embedding,
-                    category=search_category,
-                    k=30,
-                    search_k=400,
-                )
+        logger.info(f"Item {item_index} - Vector search → brand/color boost (brand={detected_brand}, color={detected_color}, secondary={detected_secondary})")
+        with ANALYSIS_DURATION.labels(stage='search_products').time():
+            search_results = opensearch_service.search_vector_then_filter(
+                embedding=embedding,
+                category=search_category,
+                brand=detected_brand,
+                color=detected_color,
+                secondary_color=detected_secondary,
+                item_type=detected_item_type,
+                k=30,
+                search_k=400,
+            )
 
         if not search_results:
             logger.warning(f"No matching products found for item {item_index}")
