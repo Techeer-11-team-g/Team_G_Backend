@@ -8,7 +8,7 @@ from datetime import timedelta
 import random
 
 from users.models import User
-from products.models import SizeGroup, SizeCode, Product
+from products.models import SizeCode, Product
 from analyses.models import (
     UploadedImage, ImageAnalysis, DetectedObject,
     ObjectProductMapping, SelectedProduct
@@ -28,15 +28,15 @@ class Command(BaseCommand):
         users = self._create_users()
         self.stdout.write(self.style.SUCCESS(f'   -> {len(users)}명 생성 완료'))
 
-        # 2. SizeGroup & SizeCode 생성
-        self.stdout.write('2. 사이즈 그룹/코드 생성 중...')
-        size_groups, size_codes = self._create_sizes()
-        self.stdout.write(self.style.SUCCESS(f'   -> 그룹 {len(size_groups)}개, 코드 {len(size_codes)}개 생성 완료'))
-
-        # 3. Products 생성
-        self.stdout.write('3. 상품 생성 중...')
+        # 2. Products 생성
+        self.stdout.write('2. 상품 생성 중...')
         products = self._create_products()
         self.stdout.write(self.style.SUCCESS(f'   -> {len(products)}개 생성 완료'))
+
+        # 3. SizeCode 생성 (Product에 연결)
+        self.stdout.write('3. 사이즈 코드 생성 중...')
+        size_codes = self._create_sizes(products)
+        self.stdout.write(self.style.SUCCESS(f'   -> {len(size_codes)}개 생성 완료'))
 
         # 4. UploadedImages 생성
         self.stdout.write('4. 업로드 이미지 생성 중...')
@@ -100,7 +100,7 @@ class Command(BaseCommand):
                 defaults={
                     **data,
                     'birth_date': timezone.now() - timedelta(days=random.randint(7000, 15000)),
-                    'user_profile_url': f'https://example.com/profiles/{data["username"]}.jpg',
+                    'user_image_url': f'https://example.com/profiles/{data["username"]}.jpg',
                 }
             )
             if created:
@@ -108,44 +108,6 @@ class Command(BaseCommand):
                 user.save()
             users.append(user)
         return users
-
-    def _create_sizes(self):
-        size_groups_data = [
-            {'category': '의류'},
-            {'category': '신발'},
-            {'category': '가방'},
-        ]
-        size_groups = []
-        for data in size_groups_data:
-            sg, _ = SizeGroup.objects.get_or_create(**data)
-            size_groups.append(sg)
-
-        size_codes_data = [
-            # 의류 사이즈
-            {'size_group': size_groups[0], 'size_value': 'XS'},
-            {'size_group': size_groups[0], 'size_value': 'S'},
-            {'size_group': size_groups[0], 'size_value': 'M'},
-            {'size_group': size_groups[0], 'size_value': 'L'},
-            {'size_group': size_groups[0], 'size_value': 'XL'},
-            {'size_group': size_groups[0], 'size_value': 'XXL'},
-            # 신발 사이즈
-            {'size_group': size_groups[1], 'size_value': '230'},
-            {'size_group': size_groups[1], 'size_value': '240'},
-            {'size_group': size_groups[1], 'size_value': '250'},
-            {'size_group': size_groups[1], 'size_value': '260'},
-            {'size_group': size_groups[1], 'size_value': '270'},
-            {'size_group': size_groups[1], 'size_value': '280'},
-            # 가방 사이즈
-            {'size_group': size_groups[2], 'size_value': 'S'},
-            {'size_group': size_groups[2], 'size_value': 'M'},
-            {'size_group': size_groups[2], 'size_value': 'L'},
-        ]
-        size_codes = []
-        for data in size_codes_data:
-            sc, _ = SizeCode.objects.get_or_create(**data)
-            size_codes.append(sc)
-
-        return size_groups, size_codes
 
     def _create_products(self):
         products_data = [
@@ -169,6 +131,48 @@ class Command(BaseCommand):
             )
             products.append(product)
         return products
+
+    def _create_sizes(self, products):
+        """상품별 사이즈 코드 생성"""
+        # 신발 상품 (Nike, Adidas, Converse)
+        shoe_products = [p for p in products if p.brand_name in ['Nike', 'Adidas', 'Converse']]
+        shoe_sizes = ['230', '240', '250', '260', '270', '280']
+
+        # 의류 상품
+        clothing_products = [p for p in products if p.brand_name in ['Zara', 'H&M', 'Uniqlo', 'Musinsa Standard', "Levi's"]]
+        clothing_sizes = ['XS', 'S', 'M', 'L', 'XL', 'XXL']
+
+        # 가방 상품
+        bag_products = [p for p in products if p.brand_name in ['Gucci', 'Louis Vuitton']]
+        bag_sizes = ['S', 'M', 'L']
+
+        size_codes = []
+
+        for product in shoe_products:
+            for size in shoe_sizes:
+                sc, _ = SizeCode.objects.get_or_create(
+                    product=product,
+                    size_value=size,
+                )
+                size_codes.append(sc)
+
+        for product in clothing_products:
+            for size in clothing_sizes:
+                sc, _ = SizeCode.objects.get_or_create(
+                    product=product,
+                    size_value=size,
+                )
+                size_codes.append(sc)
+
+        for product in bag_products:
+            for size in bag_sizes:
+                sc, _ = SizeCode.objects.get_or_create(
+                    product=product,
+                    size_value=size,
+                )
+                size_codes.append(sc)
+
+        return size_codes
 
     def _create_uploaded_images(self, users):
         uploaded_images = []
@@ -211,7 +215,6 @@ class Command(BaseCommand):
                         'bbox_y1': y1,
                         'bbox_x2': min(x2, 1.0),
                         'bbox_y2': min(y2, 1.0),
-                        'confidence': round(random.uniform(0.7, 0.99), 2),
                     }
                 )
                 detected_objects.append(obj)
@@ -235,16 +238,18 @@ class Command(BaseCommand):
     def _create_selected_products(self, products, size_codes):
         selected_products = []
         for product in products:
-            # 각 상품당 2-3개 사이즈 옵션
-            num_sizes = random.randint(2, 3)
-            selected_sizes = random.sample(size_codes, min(num_sizes, len(size_codes)))
-            for size in selected_sizes:
-                sp, _ = SelectedProduct.objects.get_or_create(
-                    product=product,
-                    size_code=size,
-                    defaults={'selected_product_inventory': random.randint(0, 100)}
-                )
-                selected_products.append(sp)
+            # 해당 상품의 사이즈 코드 중 일부 선택
+            product_sizes = [sc for sc in size_codes if sc.product_id == product.id]
+            if product_sizes:
+                num_sizes = min(random.randint(2, 3), len(product_sizes))
+                selected_sizes = random.sample(product_sizes, num_sizes)
+                for size in selected_sizes:
+                    sp, _ = SelectedProduct.objects.get_or_create(
+                        product=product,
+                        size_code=size,
+                        defaults={'selected_product_inventory': random.randint(0, 100)}
+                    )
+                    selected_products.append(sp)
         return selected_products
 
     def _create_user_images(self, users):

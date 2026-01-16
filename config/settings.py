@@ -163,21 +163,18 @@ CACHES = {
 # =============================================================================
 
 # Broker - RabbitMQ (primary) or Redis (fallback)
-CELERY_BROKER_URL = os.getenv(
-    'CELERY_BROKER_URL',
-    f'amqp://{os.getenv("RABBITMQ_USER", "guest")}:{os.getenv("RABBITMQ_PASSWORD", "guest")}@{os.getenv("RABBITMQ_HOST", "localhost")}:{os.getenv("RABBITMQ_PORT", "5672")}//'
-)
+CELERY_BROKER_URL = 'amqp://guest:guest@localhost:5672//'
 
 # Result backend - Redis
-CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL)
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
+CELERY_TIMEZONE = 'Asia/Seoul'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
-
+CELERY_TASK_ALWAYS_EAGER = False
 
 # =============================================================================
 # OpenSearch Configuration
@@ -195,6 +192,7 @@ OPENSEARCH_USE_SSL = os.getenv('OPENSEARCH_USE_SSL', 'False').lower() == 'true'
 # =============================================================================
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 LANGCHAIN_TRACING_V2 = os.getenv('LANGCHAIN_TRACING_V2', 'false')
 LANGCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY', '')
 
@@ -259,6 +257,41 @@ MEDIA_ROOT = BASE_DIR / 'media'
 LOG_DIR = BASE_DIR / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
 
+# Loki configuration
+LOKI_URL = os.getenv('LOKI_URL', 'http://localhost:3100/loki/api/v1/push')
+LOKI_ENABLED = os.getenv('LOKI_ENABLED', 'true').lower() == 'true'
+
+# Build handlers dict dynamically
+_log_handlers = {
+    'console': {
+        'class': 'logging.StreamHandler',
+        'formatter': 'verbose',
+    },
+    'file': {
+        'class': 'logging.handlers.RotatingFileHandler',
+        'filename': LOG_DIR / 'django.log',
+        'maxBytes': 10 * 1024 * 1024,  # 10MB
+        'backupCount': 5,
+        'formatter': 'json',
+    },
+}
+
+# Add Loki handler if enabled
+if LOKI_ENABLED:
+    try:
+        import logging_loki
+        _log_handlers['loki'] = {
+            'class': 'logging_loki.LokiHandler',
+            'url': LOKI_URL,
+            'tags': {'app': 'team-g-backend'},
+            'version': '1',
+        }
+        _active_handlers = ['console', 'file', 'loki']
+    except ImportError:
+        _active_handlers = ['console', 'file']
+else:
+    _active_handlers = ['console', 'file']
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -271,31 +304,19 @@ LOGGING = {
             'format': '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}',
         },
     },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
-        },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': LOG_DIR / 'django.log',
-            'maxBytes': 10 * 1024 * 1024,  # 10MB
-            'backupCount': 5,
-            'formatter': 'json',
-        },
-    },
+    'handlers': _log_handlers,
     'root': {
-        'handlers': ['console', 'file'],
+        'handlers': _active_handlers,
         'level': 'INFO',
     },
     'loggers': {
         'django': {
-            'handlers': ['console', 'file'],
+            'handlers': _active_handlers,
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
             'propagate': False,
         },
         'celery': {
-            'handlers': ['console', 'file'],
+            'handlers': _active_handlers,
             'level': 'INFO',
             'propagate': False,
         },

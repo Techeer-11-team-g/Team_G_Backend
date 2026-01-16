@@ -16,6 +16,35 @@ class OrderSerializer(serializers.ModelSerializer):
         ret['order_status'] = first_item.order_status if first_item else None
         return ret 
 
+class OrderItemDetailSerializer(serializers.ModelSerializer):
+    order_item_id = serializers.IntegerField(source='id')
+    selected_product_id = serializers.IntegerField(source='product_item.id')
+    product_name = serializers.CharField(source='product_item.product.product_name')
+    
+    class Meta:
+        model = OrderItem
+        fields = ['order_item_id', 'order_status', 'selected_product_id', 'purchased_quantity', 'price_at_order', 'product_name']
+
+class OrderDetailSerializer(serializers.ModelSerializer):
+    order_id = serializers.IntegerField(source='id')
+    order_items = OrderItemDetailSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Order
+        fields = ['order_id', 'total_price', 'delivery_address', 'order_items', 'created_at', 'updated_at']
+
+
+class OrderListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Order
+        fields = ['id', 'total_price', 'created_at']
+        read_only_fields = ['id', 'total_price', 'created_at']
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Rename 'id' to 'order_id'
+        ret['order_id'] = ret.pop('id')
+        return ret
+
 
 class OrderCreateSerializer(serializers.ModelSerializer):
     cart_item_ids = serializers.ListField(
@@ -83,7 +112,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
             for item in cart_items:
                 order_items.append(OrderItem(
                     order=order,
-                    product_item=item.selected_product,
+                    selected_product=item.selected_product,
                     purchased_quantity=item.quantity,
                     price_at_order=item.selected_product.product.selling_price,
                     order_status=OrderItem.OrderStatus.PAID 
@@ -97,4 +126,44 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     
     def to_representation(self, instance):
         # reuse OrderSerializer's representation for consistency
-        return OrderSerializer(instance).data
+        return OrderSerializer(instance).data 
+
+class OrderCancelSerializer(serializers.ModelSerializer):
+    order_status = serializers.CharField(write_only=True)
+    class Meta:
+        model = Order
+        fields = ['order_status']
+
+    def validate_order_status(self, value):
+        if value != 'canceled':
+            raise serializers.ValidationError("order_status는 'canceled'여야 합니다.")
+        return value
+
+    def validate(self, attrs):
+        # 취소 가능 상태: 결제 대기(PENDING), 결제 완료(PAID), 배송 준비 중(PREPARING)
+        cancellable_statuses = [
+            OrderItem.OrderStatus.PENDING,
+            OrderItem.OrderStatus.PAID,
+            OrderItem.OrderStatus.PREPARING
+        ]
+        
+        # 주문에 포함된 항목 중 하나라도 취소 불가능한 상태(배송 중, 배송 완료, 이미 취소됨 등)가 있으면 에러 발생
+        if self.instance.order_items.exclude(order_status__in=cancellable_statuses).exists():
+            raise serializers.ValidationError("이미 배송 중이거나 취소 불가능한 상태입니다.")
+        return attrs
+
+    def update(self, instance, validated_data):
+        with transaction.atomic():
+            # 주문에 속한 모든 항목의 상태를 'CANCELLED'로 변경
+            instance.order_items.all().update(order_status=OrderItem.OrderStatus.CANCELLED)
+            # 주문 모델의 updated_at 갱신
+            instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        # 요청 명세에 맞춘 응답 오버라이드
+        return {
+            "order_id": instance.id,
+            "order_status": "cancelled",
+            "updated_at": instance.updated_at
+        }

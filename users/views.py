@@ -53,8 +53,8 @@ class UserOnboardingView(APIView):
         # 명세서에 정의된 400 에러 메시지 형식 준수
         return Response({"message": "Invalid request data"}, status=status.HTTP_400_BAD_REQUEST)
 
+
 class UserMeView(APIView):
-    # 로그인한 사용자만 접근 가능하도록 설정
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -64,7 +64,6 @@ class UserMeView(APIView):
         tags=['User']
     )
     def get(self, request):
-        """현재 로그인한 본인의 정보 조회"""
-        # request.user에는 현재 로그인된 사용자의 객체가 담겨 있습니다.
+        """사용자 정보 조회"""
         serializer = UserProfileSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)

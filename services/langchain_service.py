@@ -134,6 +134,77 @@ Respond in JSON format:
         except Exception as e:
             return {'quality': 'unknown', 'reason': str(e)}
 
+    def parse_refine_query(
+        self,
+        query: str,
+        available_categories: list[str],
+    ) -> dict:
+        """
+        Parse natural language query for result refinement.
+
+        Args:
+            query: User's natural language query (e.g., "상의만 다시 검색해줘")
+            available_categories: List of available categories from detected objects
+
+        Returns:
+            Parsed action with filters
+        """
+        prompt = f"""다음 사용자 요청을 분석하여 이미지 분석 결과 수정에 필요한 정보를 추출하세요.
+
+사용자 요청: "{query}"
+
+현재 검출된 객체 카테고리: {available_categories}
+
+다음 JSON 형식으로 응답하세요:
+{{
+    "action": "research" | "filter" | "change_category",
+    "target_categories": ["상의", "하의" 등 대상 카테고리 목록 - 원본 카테고리명 사용],
+    "search_keywords": "추가 검색 키워드 (없으면 null)",
+    "brand_filter": "브랜드 필터 (없으면 null)",
+    "price_filter": {{"min": 숫자, "max": 숫자}} (없으면 null),
+    "style_keywords": ["캐주얼", "포멀" 등 스타일 키워드 목록]
+}}
+
+규칙:
+- "상의", "top", "아우터", "outer" 등은 모두 target_categories에 해당 카테고리로 포함
+- "하의", "bottom", "pants", "바지" 등도 마찬가지
+- "다시 검색", "재검색" 등은 action: "research"
+- "비슷한", "더 저렴한" 등 조건 추가는 action: "filter"
+- 카테고리 변경 요청은 action: "change_category"
+- target_categories가 비어있으면 모든 카테고리 대상"""
+
+        try:
+            response = self.chat(prompt, system_message="You are a Korean fashion search assistant. Always respond in valid JSON format.")
+            import json
+            start = response.find('{')
+            end = response.rfind('}') + 1
+            if start >= 0 and end > start:
+                result = json.loads(response[start:end])
+                # Validate and normalize
+                if 'target_categories' not in result or not result['target_categories']:
+                    result['target_categories'] = available_categories
+                if 'action' not in result:
+                    result['action'] = 'research'
+                return result
+            return {
+                'action': 'research',
+                'target_categories': available_categories,
+                'search_keywords': None,
+                'brand_filter': None,
+                'price_filter': None,
+                'style_keywords': [],
+            }
+        except Exception as e:
+            return {
+                'action': 'research',
+                'target_categories': available_categories,
+                'search_keywords': None,
+                'brand_filter': None,
+                'price_filter': None,
+                'style_keywords': [],
+                'error': str(e),
+            }
+
     def refine_search_filters(
         self,
         category: str,

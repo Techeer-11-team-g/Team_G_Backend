@@ -1,36 +1,61 @@
 """
-CLIP Embeddings Service for image vector generation.
-Generates embeddings directly from images using CLIP model.
+Marqo-FashionCLIP Embeddings Service for image vector generation.
+Generates embeddings directly from images using Marqo-FashionCLIP model.
+Uses float64 on Apple Silicon to avoid numerical precision issues.
+
+Marqo-FashionCLIP: +57% improvement over FashionCLIP 2.0 (Aug 2024)
+https://huggingface.co/Marqo/marqo-fashionCLIP
 """
 
 import io
 import logging
+import platform
+import time
 from typing import Optional
 
+import torch
 from PIL import Image
+
+from services.metrics import EXTERNAL_API_DURATION
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """CLIP-based image embedding service for vector generation."""
+    """Marqo-FashionCLIP-based image embedding service for vector generation."""
 
-    # CLIP model (outputs 512 dimensions)
-    CLIP_MODEL = "openai/clip-vit-base-patch32"
-    # Embedding dimensions
+    # Marqo-FashionCLIP model (outputs 512 dimensions, +57% vs FashionCLIP 2.0)
+    CLIP_MODEL = "hf-hub:Marqo/marqo-fashionCLIP"
+    # Embedding dimensions (same as FashionCLIP - compatible with existing DB)
     EMBEDDING_DIMENSIONS = 512
 
     def __init__(self):
-        from transformers import CLIPProcessor, CLIPModel
+        import open_clip
 
-        logger.info(f"Loading CLIP model: {self.CLIP_MODEL}")
-        self.model = CLIPModel.from_pretrained(self.CLIP_MODEL)
-        self.processor = CLIPProcessor.from_pretrained(self.CLIP_MODEL)
-        logger.info("CLIP model loaded successfully")
+        logger.info(f"Loading Marqo-FashionCLIP model: {self.CLIP_MODEL}")
+
+        # Load model using open_clip
+        self.model, _, self.preprocess = open_clip.create_model_and_transforms(self.CLIP_MODEL)
+        self.tokenizer = open_clip.get_tokenizer(self.CLIP_MODEL)
+
+        # Check if running on Apple Silicon (M1/M2/M3)
+        self.use_float64 = (
+            platform.system() == "Darwin" and
+            platform.processor() == "arm"
+        )
+
+        if self.use_float64:
+            logger.info("Apple Silicon detected - using float64 for numerical stability")
+            self.model = self.model.double()
+
+        # Set to evaluation mode
+        self.model.eval()
+
+        logger.info("Marqo-FashionCLIP model loaded successfully")
 
     def get_image_embedding(self, image_bytes: bytes) -> list[float]:
         """
-        Generate embedding directly from image using CLIP.
+        Generate embedding directly from image using Marqo-FashionCLIP.
 
         Args:
             image_bytes: Raw image bytes
@@ -38,24 +63,27 @@ class EmbeddingService:
         Returns:
             512-dimensional embedding vector
         """
-        import torch
-
+        start_time = time.time()
         try:
             # Load image from bytes
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-            # Process image for CLIP
-            inputs = self.processor(images=image, return_tensors="pt")
+            # Preprocess image
+            image_tensor = self.preprocess(image).unsqueeze(0)
+
+            # Convert to float64 if on Apple Silicon
+            if self.use_float64:
+                image_tensor = image_tensor.double()
 
             # Generate embedding
             with torch.no_grad():
-                image_features = self.model.get_image_features(**inputs)
+                image_features = self.model.encode_image(image_tensor)
 
             # Normalize the embedding
             image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
 
-            # Convert to list
-            embedding = image_features.squeeze().tolist()
+            # Convert to float32 list for compatibility
+            embedding = image_features.squeeze().float().tolist()
 
             logger.info(f"Generated image embedding: {len(embedding)} dimensions")
             return embedding
@@ -63,10 +91,13 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed to generate image embedding: {e}")
             raise
+        finally:
+            duration = time.time() - start_time
+            EXTERNAL_API_DURATION.labels(service='fashionclip').observe(duration)
 
     def get_text_embedding(self, text: str) -> list[float]:
         """
-        Generate embedding from text using CLIP.
+        Generate embedding from text using Marqo-FashionCLIP.
         Useful for text-based product search.
 
         Args:
@@ -75,21 +106,25 @@ class EmbeddingService:
         Returns:
             512-dimensional embedding vector
         """
-        import torch
-
         try:
-            # Process text for CLIP
-            inputs = self.processor(text=[text], return_tensors="pt", padding=True)
+            # Tokenize text
+            text_tokens = self.tokenizer([text])
 
-            # Generate embedding
-            with torch.no_grad():
-                text_features = self.model.get_text_features(**inputs)
+            # For Apple Silicon, text encoding needs special handling
+            if self.use_float64:
+                self.model.float()
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
+                self.model.double()
+            else:
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
 
             # Normalize the embedding
             text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
 
-            # Convert to list
-            embedding = text_features.squeeze().tolist()
+            # Convert to float32 list for compatibility
+            embedding = text_features.squeeze().float().tolist()
 
             logger.info(f"Generated text embedding: {len(embedding)} dimensions")
             return embedding
@@ -97,6 +132,47 @@ class EmbeddingService:
         except Exception as e:
             logger.error(f"Failed to generate text embedding: {e}")
             raise
+
+    def get_batch_text_embeddings(self, texts: list[str]) -> list[list[float]]:
+        """
+        Generate embeddings for multiple texts in a single batch.
+        Much faster than calling get_text_embedding multiple times.
+
+        Args:
+            texts: List of texts to embed
+
+        Returns:
+            List of 512-dimensional embedding vectors
+        """
+        if not texts:
+            return []
+
+        try:
+            # Tokenize all texts at once
+            text_tokens = self.tokenizer(texts)
+
+            # For Apple Silicon, text encoding needs special handling
+            if self.use_float64:
+                self.model.float()
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
+                self.model.double()
+            else:
+                with torch.no_grad():
+                    text_features = self.model.encode_text(text_tokens)
+
+            # Normalize embeddings
+            text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+
+            # Convert to list of lists
+            embeddings = text_features.float().tolist()
+
+            logger.info(f"Generated {len(embeddings)} text embeddings in batch")
+            return embeddings
+
+        except Exception as e:
+            logger.error(f"Failed to generate batch text embeddings: {e}")
+            return []
 
     def get_batch_image_embeddings(self, image_bytes_list: list[bytes]) -> list[list[float]]:
         """
@@ -108,27 +184,29 @@ class EmbeddingService:
         Returns:
             List of 512-dimensional embedding vectors
         """
-        import torch
-
         try:
-            # Load all images
-            images = [
-                Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                for img_bytes in image_bytes_list
-            ]
+            # Load and preprocess all images
+            images = []
+            for img_bytes in image_bytes_list:
+                image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                images.append(self.preprocess(image))
 
-            # Process images for CLIP
-            inputs = self.processor(images=images, return_tensors="pt")
+            # Stack into batch tensor
+            image_tensor = torch.stack(images)
+
+            # Convert to float64 if on Apple Silicon
+            if self.use_float64:
+                image_tensor = image_tensor.double()
 
             # Generate embeddings
             with torch.no_grad():
-                image_features = self.model.get_image_features(**inputs)
+                image_features = self.model.encode_image(image_tensor)
 
             # Normalize embeddings
             image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
 
-            # Convert to list of lists
-            embeddings = image_features.tolist()
+            # Convert to float32 list of lists for compatibility
+            embeddings = image_features.float().tolist()
 
             logger.info(f"Generated {len(embeddings)} image embeddings")
             return embeddings

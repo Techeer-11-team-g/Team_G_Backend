@@ -7,6 +7,10 @@ User = get_user_model()
 class UserOnboardingSerializer(serializers.ModelSerializer):
     # 프론트에서 user_email로 보낸다니 source를 이용해 매핑 가능(명세서의 user_email을 모델의 email 필드와 매핑)
     user_email = serializers.EmailField(source='email', required=True)
+    
+    user_id = serializers.IntegerField(source='id', read_only=True)
+    user_name = serializers.CharField(source='username', read_only=True)
+    updated_at = serializers.DateTimeField(source='updated_at', read_only=True) 
 
     class Meta:
         model = User
@@ -28,13 +32,23 @@ class UserOnboardingResponseSerializer(serializers.ModelSerializer):
 
 # 일반적인 프로필 정보를 보여주는 용도
 class UserProfileSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(source='id', read_only=True)
+    user_name = serializers.CharField(source='username', read_only=True)
+    user_email = serializers.EmailField(source='email', read_only=True)
+
     class Meta:
         model = User
-        # 응답으로 내려줄 필드들만 선택합니다.
         fields = [
-            'id', 'username', 'email', 'phone_number', 
-            'address', 'birth_date', 'user_image_url', 
-            'payment', 'created_at'
+            'user_id', 
+            'user_name', 
+            'user_email', 
+            'phone_number', 
+            'address', 
+            'birth_date', 
+            'user_image_url', 
+            'payment', 
+            'updated_at',
+            'created_at'
         ]
         # 조회 전용이므로 읽기 전용 필드로 설정할 수 있습니다.
         read_only_fields = ['id', 'username', 'email', 'created_at'] 
