@@ -2,8 +2,16 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from rest_framework import mixins
 from rest_framework.pagination import CursorPagination
-from .models import Order
-from .serializers import OrderCreateSerializer, OrderSerializer, OrderListSerializer, OrderDetailSerializer, OrderCancelSerializer
+from rest_framework.views import APIView
+from django.contrib.auth import get_user_model
+from .models import Order, CartItem
+
+User = get_user_model()
+from .serializers import (
+    OrderCreateSerializer, OrderSerializer, OrderListSerializer,
+    OrderDetailSerializer, OrderCancelSerializer,
+    CartItemSerializer, CartItemCreateSerializer
+)
 
 class OrderCursorPagination(CursorPagination):
     ordering = '-created_at'
@@ -57,4 +65,70 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Upda
         order = serializer.save()
         
         # Response(201 Created) body construction handled by serializer.to_representation
-        return Response(serializer.data, status=status.HTTP_201_CREATED) 
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class CartItemListCreateView(APIView):
+    """
+    장바구니 조회 및 추가 API
+    GET /api/v1/cart-items - 장바구니 조회
+    POST /api/v1/cart-items - 장바구니 추가
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        """장바구니 조회"""
+        user = request.user
+        cart_items = CartItem.objects.filter(
+            user=user,
+            is_deleted=False
+        ).select_related('selected_product__product', 'selected_product__size_code')
+
+        serializer = CartItemSerializer(cart_items, many=True)
+
+        # 총 수량, 총 가격 계산
+        total_quantity = sum(item.quantity for item in cart_items)
+        total_price = sum(
+            item.quantity * item.selected_product.product.selling_price
+            for item in cart_items
+        )
+
+        return Response({
+            'items': serializer.data,
+            'total_quantity': total_quantity,
+            'total_price': total_price
+        })
+
+    def post(self, request):
+        """장바구니 추가"""
+        serializer = CartItemCreateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        cart_item = serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class CartItemDeleteView(APIView):
+    """
+    장바구니 상품 삭제 API
+    DELETE /api/v1/cart-items/{cart_item_id}
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, cart_item_id):
+        """장바구니 상품 삭제 (Soft Delete)"""
+        user = request.user
+        try:
+            cart_item = CartItem.objects.get(
+                id=cart_item_id,
+                user=user,
+                is_deleted=False
+            )
+        except CartItem.DoesNotExist:
+            return Response(
+                {'detail': '해당 장바구니 항목을 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        cart_item.is_deleted = True
+        cart_item.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
