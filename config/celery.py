@@ -4,7 +4,7 @@ Celery configuration for config project.
 
 import os
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, celeryd_init
 from kombu import Queue
 
 # Set the default Django settings module
@@ -34,8 +34,18 @@ app.autodiscover_tasks()
 
 
 @worker_process_init.connect
-def init_worker_tracing(**kwargs):
-    """Initialize OpenTelemetry tracing when Celery worker starts."""
+def init_worker_tracing_prefork(**kwargs):
+    """Initialize OpenTelemetry tracing for prefork pool workers."""
+    try:
+        from config.tracing import init_tracing
+        init_tracing(service_name="team-g-celery-worker")
+    except ImportError:
+        pass  # Tracing packages not installed
+
+
+@celeryd_init.connect
+def init_worker_tracing_threads(**kwargs):
+    """Initialize OpenTelemetry tracing for threads/solo pool (main process)."""
     try:
         from config.tracing import init_tracing
         init_tracing(service_name="team-g-celery-worker")

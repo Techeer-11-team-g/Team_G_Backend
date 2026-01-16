@@ -34,4 +34,6 @@ opentelemetry-instrumentation-django==0.43b0
 opentelemetry-instrumentation-celery==0.43b0
 opentelemetry-instrumentation-requests==0.43b0
 opentelemetry-instrumentation-logging==0.43b0
+opentelemetry-instrumentation-httpx==0.43b0
+opentelemetry-instrumentation-grpc==0.43b0
 opentelemetry-exporter-jaeger==1.21.0
