@@ -51,6 +51,8 @@ def init_tracing(service_name: str = "team-g-backend"):
         from opentelemetry.instrumentation.celery import CeleryInstrumentor
         from opentelemetry.instrumentation.requests import RequestsInstrumentor
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        from opentelemetry.instrumentation.grpc import GrpcInstrumentorClient
 
         # Create resource with service name
         resource = Resource.create({
@@ -80,6 +82,12 @@ def init_tracing(service_name: str = "team-g-backend"):
 
         # Auto-instrumentation for requests library (external API calls)
         RequestsInstrumentor().instrument()
+
+        # Auto-instrumentation for httpx (used by Anthropic SDK)
+        HTTPXClientInstrumentor().instrument()
+
+        # Auto-instrumentation for gRPC (used by Google Cloud Vision/Storage)
+        GrpcInstrumentorClient().instrument()
 
         # Add trace_id to logs
         LoggingInstrumentor().instrument(set_logging_format=True)
