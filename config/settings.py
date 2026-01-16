@@ -255,6 +255,41 @@ MEDIA_ROOT = BASE_DIR / 'media'
 LOG_DIR = BASE_DIR / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
 
+# Loki configuration
+LOKI_URL = os.getenv('LOKI_URL', 'http://localhost:3100/loki/api/v1/push')
+LOKI_ENABLED = os.getenv('LOKI_ENABLED', 'true').lower() == 'true'
+
+# Build handlers dict dynamically
+_log_handlers = {
+    'console': {
+        'class': 'logging.StreamHandler',
+        'formatter': 'verbose',
+    },
+    'file': {
+        'class': 'logging.handlers.RotatingFileHandler',
+        'filename': LOG_DIR / 'django.log',
+        'maxBytes': 10 * 1024 * 1024,  # 10MB
+        'backupCount': 5,
+        'formatter': 'json',
+    },
+}
+
+# Add Loki handler if enabled
+if LOKI_ENABLED:
+    try:
+        import logging_loki
+        _log_handlers['loki'] = {
+            'class': 'logging_loki.LokiHandler',
+            'url': LOKI_URL,
+            'tags': {'app': 'team-g-backend'},
+            'version': '1',
+        }
+        _active_handlers = ['console', 'file', 'loki']
+    except ImportError:
+        _active_handlers = ['console', 'file']
+else:
+    _active_handlers = ['console', 'file']
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -267,31 +302,19 @@ LOGGING = {
             'format': '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}',
         },
     },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
-        },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': LOG_DIR / 'django.log',
-            'maxBytes': 10 * 1024 * 1024,  # 10MB
-            'backupCount': 5,
-            'formatter': 'json',
-        },
-    },
+    'handlers': _log_handlers,
     'root': {
-        'handlers': ['console', 'file'],
+        'handlers': _active_handlers,
         'level': 'INFO',
     },
     'loggers': {
         'django': {
-            'handlers': ['console', 'file'],
+            'handlers': _active_handlers,
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
             'propagate': False,
         },
         'celery': {
-            'handlers': ['console', 'file'],
+            'handlers': _active_handlers,
             'level': 'INFO',
             'propagate': False,
         },
