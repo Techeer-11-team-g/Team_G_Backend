@@ -638,16 +638,17 @@ class OpenSearchService:
         category: str,
         brand: str = None,
         color: str = None,
+        secondary_color: str = None,
         item_type: str = None,
         k: int = 5,
-        search_k: int = 200,
+        search_k: int = 400,
         index_name: str = 'musinsa_products',
     ) -> list[dict]:
         """
         벡터 유사도 먼저 → 브랜드/색상 필터.
 
         1. k-NN으로 상위 search_k개 가져오기
-        2. 브랜드/색상/아이템타입으로 필터링
+        2. 브랜드/색상/아이템타입으로 부스팅 및 필터링
         3. 상위 k개 반환
         """
         import logging
@@ -656,15 +657,15 @@ class OpenSearchService:
         related_categories = self.RELATED_CATEGORIES.get(category, [category])
         normalized_brand = brand.lower().strip() if brand else None
         normalized_color = color.lower().strip() if color else None
+        normalized_secondary = secondary_color.lower().strip() if secondary_color else None
         normalized_item_type = item_type.lower().strip() if item_type else None
 
-        # 색상 키워드
-        color_keywords = []
+        # 검색할 색상 목록
+        search_colors = []
         if normalized_color:
-            color_keywords = self.COLOR_KEYWORDS.get(normalized_color, [normalized_color])
-
-        # 제외할 색상
-        exclude_colors = self._get_conflicting_colors(normalized_color) if normalized_color else []
+            search_colors.append(normalized_color)
+        if normalized_secondary and normalized_secondary != normalized_color:
+            search_colors.append(normalized_secondary)
 
         # 아이템 타입 제외 키워드
         exclude_item_types = []
@@ -674,7 +675,7 @@ class OpenSearchService:
         # 1. k-NN 벡터 유사도 검색
         vector_query = {
             'size': search_k,
-            '_source': ['itemId', 'category', 'brand', 'productName', 'imageUrl', 'price', 'productUrl'],
+            '_source': ['itemId', 'category', 'brand', 'productName', 'imageUrl', 'price', 'productUrl', 'attributes.colors'],
             'query': {
                 'knn': {
                     'image_vector': {
@@ -688,34 +689,20 @@ class OpenSearchService:
         vector_response = self.client.search(index=index_name, body=vector_query)
         logger.info(f"k-NN returned {len(vector_response['hits']['hits'])} candidates")
 
-        # 2. 결과 필터링
+        # 2. 결과 필터링 및 부스팅
         results = []
+        boosted_results = []  # 브랜드/색상 매칭 결과
+
         for hit in vector_response['hits']['hits']:
             src = hit['_source']
             product_category = src.get('category')
             product_brand = (src.get('brand') or '').lower()
             product_name = (src.get('productName') or '').lower()
+            product_colors = src.get('attributes', {}).get('colors', [])
 
             # 카테고리 필터
             if product_category not in related_categories:
                 continue
-
-            # 브랜드 필터
-            if normalized_brand:
-                if normalized_brand not in product_brand and normalized_brand not in product_name:
-                    continue
-
-            # 색상 필터
-            if color_keywords:
-                color_match = any(kw.lower() in product_name for kw in color_keywords)
-                if not color_match:
-                    continue
-
-            # 충돌 색상 제외
-            if exclude_colors:
-                has_conflict = any(exc.lower() in product_name for exc in exclude_colors)
-                if has_conflict:
-                    continue
 
             # 아이템 타입 제외
             if exclude_item_types:
@@ -723,7 +710,7 @@ class OpenSearchService:
                 if has_exclude:
                     continue
 
-            results.append({
+            result_item = {
                 'product_id': src.get('itemId'),
                 'score': hit['_score'],
                 'category': product_category,
@@ -732,13 +719,36 @@ class OpenSearchService:
                 'image_url': src.get('imageUrl'),
                 'price': src.get('price'),
                 'product_url': src.get('productUrl'),
-            })
+            }
 
-            if len(results) >= k:
-                break
+            # 브랜드/색상 매칭 체크
+            brand_match = normalized_brand and (normalized_brand in product_brand or normalized_brand in product_name)
+            color_match = search_colors and any(c in product_colors for c in search_colors)
 
-        logger.info(f"After filtering (brand={brand}, color={color}): {len(results)} products")
-        return results
+            # 우선순위: 브랜드+색상 > 브랜드만 > 색상만 > 나머지
+            if brand_match and color_match:
+                result_item['_priority'] = 3
+                boosted_results.append(result_item)
+            elif brand_match:
+                result_item['_priority'] = 2
+                boosted_results.append(result_item)
+            elif color_match:
+                result_item['_priority'] = 1
+                boosted_results.append(result_item)
+            else:
+                result_item['_priority'] = 0
+                results.append(result_item)
+
+        # 3. 부스트된 결과 우선순위 정렬 + 나머지 결과
+        boosted_results.sort(key=lambda x: (-x['_priority'], -x['score']))
+        final_results = boosted_results + results
+
+        # _priority 필드 제거
+        for item in final_results:
+            item.pop('_priority', None)
+
+        logger.info(f"Vector→Filter: {len(boosted_results)} boosted (brand/color), {len(results)} others")
+        return final_results[:k]
 
     def search_brand_vector_color(
         self,

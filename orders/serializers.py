@@ -1,6 +1,82 @@
 from rest_framework import serializers
 from django.db import transaction
 from .models import Order, OrderItem, CartItem
+from analyses.models import SelectedProduct
+
+
+class ProductDetailsSerializer(serializers.Serializer):
+    """장바구니 상품 상세 정보"""
+    product_id = serializers.IntegerField(source='product.id')
+    brand_name = serializers.CharField(source='product.brand_name')
+    product_name = serializers.CharField(source='product.product_name')
+    selling_price = serializers.IntegerField(source='product.selling_price')
+    main_image_url = serializers.CharField(source='product.product_image_url')
+    product_url = serializers.CharField(source='product.product_url')
+    size = serializers.CharField(source='size_code.size_value', allow_null=True)
+    inventory = serializers.IntegerField(source='selected_product_inventory')
+
+
+class CartItemSerializer(serializers.ModelSerializer):
+    """장바구니 조회용 Serializer"""
+    cart_item_id = serializers.IntegerField(source='id', read_only=True)
+    selected_product_id = serializers.IntegerField(source='selected_product.id', read_only=True)
+    product_details = ProductDetailsSerializer(source='selected_product', read_only=True)
+    created_at = serializers.DateTimeField(format="%Y-%m-%dT%H:%M:%S", read_only=True)
+
+    class Meta:
+        model = CartItem
+        fields = ['cart_item_id', 'selected_product_id', 'quantity', 'product_details', 'created_at']
+
+
+class CartItemCreateSerializer(serializers.ModelSerializer):
+    """장바구니 추가용 Serializer"""
+    selected_product_id = serializers.IntegerField(write_only=True)
+    quantity = serializers.IntegerField(min_value=1)
+
+    class Meta:
+        model = CartItem
+        fields = ['selected_product_id', 'quantity']
+
+    def validate_selected_product_id(self, value):
+        try:
+            SelectedProduct.objects.get(id=value, is_deleted=False)
+        except SelectedProduct.DoesNotExist:
+            raise serializers.ValidationError("해당 상품을 찾을 수 없습니다.")
+        return value
+
+    def create(self, validated_data):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        request = self.context['request']
+        user = request.user  # JWT 인증된 유저
+
+        selected_product_id = validated_data['selected_product_id']
+        quantity = validated_data['quantity']
+
+        selected_product = SelectedProduct.objects.get(id=selected_product_id)
+
+        # 이미 장바구니에 있으면 수량 추가
+        cart_item, created = CartItem.objects.get_or_create(
+            user=user,
+            selected_product=selected_product,
+            is_deleted=False,
+            defaults={'quantity': quantity}
+        )
+
+        if not created:
+            cart_item.quantity += quantity
+            cart_item.save()
+
+        return cart_item
+
+    def to_representation(self, instance):
+        return {
+            'cart_id': instance.id,
+            'selected_product_id': instance.selected_product.id,
+            'quantity': instance.quantity,
+            'created_at': instance.created_at.strftime("%Y-%m-%dT%H:%M:%S")
+        }
 
 class OrderSerializer(serializers.ModelSerializer):
     class Meta:
@@ -57,7 +133,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
      
     class Meta:
         model = Order
-        fields = ['cart_item_ids', 'user_id', 'id', 'total_price', 'delivery_address', 'created_at']
+        fields = ['cart_item_ids', 'user_id', 'payment_method', 'id', 'total_price', 'delivery_address', 'created_at']
         read_only_fields = ['id', 'total_price', 'delivery_address', 'created_at']
 
     def validate_cart_item_ids(self, value):
