@@ -63,7 +63,10 @@ class FashnService:
         self.api_key = getattr(settings, 'THENEWBLACK_API_KEY', '')
         if not self.api_key:
             logger.warning("THENEWBLACK_API_KEY not configured")
-        self.timeout = 120
+        # Timeout 분리: (connect_timeout, read_timeout)
+        # - connect: 서버 연결까지 최대 10초 (서버 다운 시 빠른 실패 감지)
+        # - read: 응답 대기 최대 120초 (이미지 생성에 시간 소요)
+        self.timeout = (10, 120)
 
     def _to_image_url(self, image_source: Union[str, FieldFile]) -> str:
         """Convert image source to URL."""

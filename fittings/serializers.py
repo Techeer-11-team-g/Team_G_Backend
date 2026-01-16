@@ -98,21 +98,28 @@ class FittingImageSerializer(serializers.ModelSerializer):
         """
         user_image_url 검증:
         - 기존에 업로드된 UserImage의 URL을 찾아서 반환
+        - DB 레벨에서 필터링하여 성능 최적화
         """
-        # URL로 기존 UserImage 찾기
-        # URL 끝부분만 비교 (전체 URL 또는 상대 경로 모두 지원)
-        user_images = UserImage.objects.filter(is_deleted=False)
-
-        for user_image in user_images:
-            if user_image.user_image_url:
-                stored_url = str(user_image.user_image_url)
-                # 전체 URL 또는 경로가 일치하는지 확인
-                if stored_url == value or stored_url.endswith(value) or value.endswith(stored_url):
-                    return user_image
-                # .url 속성이 있는 경우 (ImageField)
-                if hasattr(user_image.user_image_url, 'url'):
-                    if user_image.user_image_url.url == value or value.endswith(user_image.user_image_url.url):
-                        return user_image
+        from django.db.models import Q
+        
+        # URL에서 경로 부분 추출 (전체 URL 또는 상대 경로 모두 지원)
+        # 예: "https://example.com/media/user-images/1.jpg" -> "user-images/1.jpg"
+        search_value = value
+        if '/media/' in value:
+            search_value = value.split('/media/')[-1]
+        elif value.startswith('/'):
+            search_value = value.lstrip('/')
+        
+        # DB 레벨에서 LIKE 쿼리로 필터링 (전체 순회 대신)
+        user_image = UserImage.objects.filter(
+            Q(user_image_url__exact=value) |
+            Q(user_image_url__exact=search_value) |
+            Q(user_image_url__endswith=search_value),
+            is_deleted=False
+        ).first()
+        
+        if user_image:
+            return user_image
 
         raise serializers.ValidationError('존재하지 않는 사용자 이미지 URL입니다. 먼저 /api/v1/user-images 에서 이미지를 업로드하세요.')
 
