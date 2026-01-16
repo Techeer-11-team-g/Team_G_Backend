@@ -10,7 +10,7 @@ def process_fitting_task(self, fitting_id):
     try:
         fitting = FittingImage.objects.select_related('user_image', 'product').get(id=fitting_id)
         fitting.fitting_image_status = FittingImage.Status.RUNNING
-        fitting.save()
+        fitting.save(update_fields=['fitting_image_status', 'updated_at'])
 
         service = get_fashn_service()
         category = service.map_category(fitting.product.category)
@@ -32,9 +32,9 @@ def process_fitting_task(self, fitting_id):
             fitting.fitting_image_status = FittingImage.Status.FAILED
             logger.error(f"Fitting {fitting_id}: failed - {result.error}")
 
-        fitting.save()
+        fitting.save(update_fields=['fitting_image_status', 'fitting_image_url', 'updated_at'])
 
     except Exception as exc:
         logger.exception(f"Fitting {fitting_id}: exception occurred")
         FittingImage.objects.filter(id=fitting_id).update(fitting_image_status=FittingImage.Status.FAILED)
-        raise self.retry(exc=exc, countdown=60)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))  # Exponential backoff
