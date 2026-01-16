@@ -3,7 +3,8 @@ from .views import (
     UserImageUploadView,
     FittingRequestView, 
     FittingStatusView, 
-    FittingResultView
+    FittingResultView,
+    FittingByProductView
 )
 
 urlpatterns = [
@@ -14,4 +15,7 @@ urlpatterns = [
     path('fitting-images', FittingRequestView.as_view(), name='fitting-request'),
     path('fitting-images/<int:fitting_image_id>/status', FittingStatusView.as_view(), name='fitting-status'),
     path('fitting-images/<int:fitting_image_id>', FittingResultView.as_view(), name='fitting-result'),
+    
+    # 상품별 피팅 결과 조회 (FITTING 버튼 클릭 시)
+    path('products/<int:product_id>/fitting', FittingByProductView.as_view(), name='fitting-by-product'),
 ]

@@ -74,3 +74,38 @@ class FittingResultView(APIView):
         fitting = get_object_or_404(FittingImage, id=fitting_image_id)
         serializer = FittingResultSerializer(fitting)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class FittingByProductView(APIView):
+    """
+    [GET] 상품 ID로 피팅 결과 조회
+    GET /api/v1/products/{product_id}/fitting
+    
+    사용자가 FITTING 버튼을 클릭했을 때,
+    해당 상품에 대해 미리 생성된 피팅 결과를 조회합니다.
+    """
+    def get(self, request, product_id):
+        # 로그인한 사용자의 피팅 결과 조회
+        user = request.user
+        
+        if not user.is_authenticated:
+            return Response(
+                {'error': '로그인이 필요합니다.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        # 해당 사용자 + 상품에 대한 피팅 결과 조회
+        fitting = FittingImage.objects.filter(
+            user_image__user=user,
+            product_id=product_id,
+            is_deleted=False
+        ).order_by('-created_at').first()
+        
+        if not fitting:
+            return Response(
+                {'error': '해당 상품에 대한 피팅 결과가 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = FittingResultSerializer(fitting)
+        return Response(serializer.data, status=status.HTTP_200_OK)

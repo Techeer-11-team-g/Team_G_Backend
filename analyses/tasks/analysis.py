@@ -250,6 +250,8 @@ def analysis_complete_callback(
     """
     모든 객체 처리 완료 후 호출되는 콜백 태스크.
     결과를 DB에 저장하고 상태를 업데이트합니다.
+    
+    🆕 추가: 분석 완료 후 각 상품에 대해 자동 피팅 요청
 
     Args:
         results: 각 서브태스크의 결과 목록
@@ -288,6 +290,10 @@ def analysis_complete_callback(
                 PRODUCT_MATCHES_TOTAL.labels(category=category).inc()
 
         logger.info(f"Analysis {analysis_id} completed: {len(valid_results)}/{total_items} items processed")
+
+        # 🆕 분석 완료 후 자동 피팅 요청
+        if user_id:
+            _trigger_auto_fittings(analysis_id, valid_results, user_id)
 
         # Celery 워커 메트릭을 Pushgateway로 푸시
         push_metrics()
@@ -718,3 +724,90 @@ def _save_analysis_results(
         logger.error(f"ImageAnalysis {analysis_id} not found")
     except Exception as e:
         logger.error(f"Failed to save analysis results: {e}")
+
+
+def _trigger_auto_fittings(analysis_id: str, results: list[dict], user_id: int):
+    """
+    분석 완료 후 자동 피팅 요청 트리거.
+    
+    사용자의 전신 이미지와 각 매칭된 상품에 대해
+    자동으로 피팅 태스크를 실행합니다.
+    
+    Args:
+        analysis_id: Analysis job ID
+        results: 분석 결과 (각 검출 객체와 매칭된 상품들)
+        user_id: 사용자 ID
+    """
+    from fittings.models import UserImage, FittingImage
+    from fittings.tasks import process_fitting_task
+    from products.models import Product
+    
+    try:
+        # 1. 사용자의 전신 이미지 조회 (가장 최근 것)
+        user_image = UserImage.objects.filter(
+            user_id=user_id,
+            is_deleted=False
+        ).order_by('-created_at').first()
+        
+        if not user_image:
+            logger.warning(f"User {user_id} has no body image, skipping auto-fitting")
+            return
+        
+        logger.info(f"Auto-fitting: Found user image {user_image.id} for user {user_id}")
+        
+        # 2. 각 검출 객체의 상위 매칭 상품에 대해 피팅 요청
+        fitting_count = 0
+        for result in results:
+            matches = result.get('matches', [])
+            if not matches:
+                continue
+            
+            # 상위 1개 상품에 대해서만 피팅 (필요시 조정 가능)
+            top_match = matches[0]
+            product_id = top_match.get('product_id')
+            
+            if not product_id:
+                continue
+            
+            try:
+                # Product 조회
+                product = Product.objects.filter(
+                    product_url__endswith=f'/{product_id}'
+                ).first()
+                
+                if not product:
+                    logger.warning(f"Product {product_id} not found, skipping")
+                    continue
+                
+                # 이미 피팅이 존재하는지 확인 (중복 방지)
+                existing_fitting = FittingImage.objects.filter(
+                    user_image=user_image,
+                    product=product,
+                    is_deleted=False
+                ).first()
+                
+                if existing_fitting:
+                    logger.info(f"Fitting already exists for product {product.id}, skipping")
+                    continue
+                
+                # FittingImage 생성 (PENDING 상태)
+                fitting = FittingImage.objects.create(
+                    user_image=user_image,
+                    product=product,
+                    fitting_image_status=FittingImage.Status.PENDING,
+                )
+                
+                # 피팅 태스크 비동기 실행
+                process_fitting_task.delay(fitting.id)
+                fitting_count += 1
+                
+                logger.info(f"Auto-fitting triggered: FittingImage {fitting.id} for product {product.id}")
+                
+            except Exception as e:
+                logger.error(f"Failed to trigger fitting for product {product_id}: {e}")
+        
+        logger.info(f"Auto-fitting completed: {fitting_count} fittings triggered for analysis {analysis_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to trigger auto-fittings for analysis {analysis_id}: {e}")
+
