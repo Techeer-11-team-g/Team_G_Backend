@@ -1,9 +1,32 @@
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
 
-from .serializers import UserOnboardingSerializer, UserProfileSerializer
+from .serializers import UserOnboardingSerializer, UserProfileSerializer, UserRegisterSerializer
+
+
+class UserRegisterView(APIView):
+    """회원가입 API"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = UserRegisterSerializer(data=request.data)
+        if serializer.is_valid(raise_exception=True):
+            user = serializer.save()
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'user': {
+                    'user_id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                },
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                }
+            }, status=status.HTTP_201_CREATED)
 
 
 class UserOnboardingView(APIView):
