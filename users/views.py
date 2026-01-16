@@ -1,5 +1,5 @@
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiExample 
@@ -85,4 +85,4 @@ class UserMeView(APIView):
     def get(self, request):
         """현재 로그인한 본인의 정보 조회"""
         serializer = UserProfileSerializer(request.user) 
-        return Response(serializer.data, status=status.HTTP_200_OK) 
+        return Response(serializer.data, status=status.HTTP_200_OK)  

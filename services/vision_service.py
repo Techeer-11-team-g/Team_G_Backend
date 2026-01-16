@@ -12,6 +12,8 @@ from django.conf import settings
 from google.cloud import vision
 from google.cloud.vision_v1 import types
 
+from services.metrics import record_api_call, DETECTED_OBJECTS_TOTAL
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,35 +61,45 @@ class DetectedItem:
 
 # Fashion category mapping from Vision API labels
 FASHION_CATEGORIES = {
+    # 1. 신발
     'shoe': 'shoes',
     'shoes': 'shoes',
     'sneaker': 'shoes',
     'boot': 'shoes',
     'sandal': 'shoes',
     'footwear': 'shoes',
+    
+    # 2. 가방
     'bag': 'bag',
     'handbag': 'bag',
     'backpack': 'bag',
     'purse': 'bag',
+    
+    # 3. 상의
     'top': 'top',
     'shirt': 'top',
     't-shirt': 'top',
     'blouse': 'top',
     'sweater': 'top',
     'hoodie': 'top',
+    
+    # 4. 하의
     'pants': 'bottom',
     'jeans': 'bottom',
     'trousers': 'bottom',
     'shorts': 'bottom',
+    'skirt': 'bottom',
+    
+    # 5. 외투
     'jacket': 'outerwear',
     'coat': 'outerwear',
     'outerwear': 'outerwear',
     'blazer': 'outerwear',
+    
+    # 6. 모자
     'hat': 'hat',
     'cap': 'hat',
     'beanie': 'hat',
-    'skirt': 'skirt',
-    'dress': 'dress',
 }
 
 
@@ -128,18 +140,14 @@ class VisionService:
     def _detect_objects(self, image: types.Image) -> list[DetectedItem]:
         """
         Internal method to detect objects using Vision API.
-
-        Args:
-            image: Vision API Image object
-
-        Returns:
-            List of detected fashion items
+        Returns only the highest confidence item for each category.
         """
-        detected_items = []
+        best_items_by_category = {}
 
         try:
             # Object localization for bounding boxes
-            response = self.client.object_localization(image=image)
+            with record_api_call('google_vision'):
+                response = self.client.object_localization(image=image)
 
             if response.error.message:
                 logger.error(f"Vision API error: {response.error.message}")
@@ -149,27 +157,78 @@ class VisionService:
                 category = self._map_to_fashion_category(obj.name.lower())
 
                 if category and obj.score >= self.min_confidence:
-                    # Convert normalized vertices to pixel coordinates
-                    vertices = obj.bounding_poly.normalized_vertices
-                    bbox = BoundingBox(
-                        x_min=int(vertices[0].x * 1000),  # Normalized 0-1 → 0-1000
-                        y_min=int(vertices[0].y * 1000),
-                        x_max=int(vertices[2].x * 1000),
-                        y_max=int(vertices[2].y * 1000),
-                    )
+                    # Keep only the highest confidence item for each category
+                    if category not in best_items_by_category or obj.score > best_items_by_category[category].confidence:
+                        vertices = obj.bounding_poly.normalized_vertices
+                        bbox = BoundingBox(
+                            x_min=int(vertices[0].x * 1000),
+                            y_min=int(vertices[0].y * 1000),
+                            x_max=int(vertices[2].x * 1000),
+                            y_max=int(vertices[2].y * 1000),
+                        )
 
-                    detected_items.append(DetectedItem(
-                        category=category,
-                        bbox=bbox,
-                        confidence=obj.score,
-                    ))
+                        best_items_by_category[category] = DetectedItem(
+                            category=category,
+                            bbox=bbox,
+                            confidence=obj.score,
+                        )
 
-            logger.info(f"Detected {len(detected_items)} fashion items")
-            return detected_items
+            result_list = list(best_items_by_category.values())
+
+            # 겹치는 bbox 제거 (IoU > 0.7이면 confidence 높은 것만 유지)
+            filtered_list = self._remove_overlapping_items(result_list)
+            logger.info(f"Detected {len(filtered_list)} unique fashion items")
+
+            # Record detected objects metrics
+            for item in filtered_list:
+                DETECTED_OBJECTS_TOTAL.labels(category=item.category).inc()
+
+            return filtered_list
 
         except Exception as e:
             logger.error(f"Failed to detect objects: {e}")
             raise
+
+    def _calculate_iou(self, bbox1: BoundingBox, bbox2: BoundingBox) -> float:
+        """Calculate Intersection over Union of two bounding boxes."""
+        x_left = max(bbox1.x_min, bbox2.x_min)
+        y_top = max(bbox1.y_min, bbox2.y_min)
+        x_right = min(bbox1.x_max, bbox2.x_max)
+        y_bottom = min(bbox1.y_max, bbox2.y_max)
+
+        if x_right < x_left or y_bottom < y_top:
+            return 0.0
+
+        intersection = (x_right - x_left) * (y_bottom - y_top)
+        area1 = bbox1.width * bbox1.height
+        area2 = bbox2.width * bbox2.height
+        union = area1 + area2 - intersection
+
+        return intersection / union if union > 0 else 0.0
+
+    def _remove_overlapping_items(self, items: list[DetectedItem], iou_threshold: float = 0.7) -> list[DetectedItem]:
+        """
+        Remove overlapping items, keeping the one with higher confidence.
+        top/outerwear가 같은 영역에서 감지되면 하나만 유지.
+        """
+        if len(items) <= 1:
+            return items
+
+        # confidence 기준 내림차순 정렬
+        sorted_items = sorted(items, key=lambda x: x.confidence, reverse=True)
+        kept_items = []
+
+        for item in sorted_items:
+            is_overlapping = False
+            for kept in kept_items:
+                iou = self._calculate_iou(item.bbox, kept.bbox)
+                if iou > iou_threshold:
+                    is_overlapping = True
+                    break
+            if not is_overlapping:
+                kept_items.append(item)
+
+        return kept_items
 
     def _map_to_fashion_category(self, label: str) -> Optional[str]:
         """

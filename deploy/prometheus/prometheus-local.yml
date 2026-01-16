@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Django application metrics (로컬 개발)
+  - job_name: 'django'
+    static_configs:
+      - targets: ['host.docker.internal:8000']
+    metrics_path: /metrics
+
+  # Pushgateway (Celery 워커 메트릭)
+  - job_name: 'pushgateway'
+    honor_labels: true
+    static_configs:
+      - targets: ['host.docker.internal:9091']

@@ -126,13 +126,13 @@ class OrderItem(models.Model):
         verbose_name='주문',
     )
 
-    product_item = models.ForeignKey(
+    selected_product = models.ForeignKey(
         'analyses.SelectedProduct',
         on_delete=models.SET_NULL,
         null=True,
         related_name='order_items',
-        db_column='product_item_id',
-        verbose_name='상품 아이템',
+        db_column='selected_product_id',
+        verbose_name='선택된 상품',
     )
 
     purchased_quantity = models.PositiveIntegerField(

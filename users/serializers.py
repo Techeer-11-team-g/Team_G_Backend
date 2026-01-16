@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 
 User = get_user_model()
 
@@ -7,6 +8,10 @@ User = get_user_model()
 class UserOnboardingSerializer(serializers.ModelSerializer):
     # 프론트에서 user_email로 보낸다니 source를 이용해 매핑 가능(명세서의 user_email을 모델의 email 필드와 매핑)
     user_email = serializers.EmailField(source='email', required=True)
+    
+    user_id = serializers.IntegerField(source='id', read_only=True)
+    user_name = serializers.CharField(source='username', read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True) 
 
     class Meta:
         model = User
@@ -28,9 +33,12 @@ class UserOnboardingResponseSerializer(serializers.ModelSerializer):
 
 # 일반적인 프로필 정보를 보여주는 용도
 class UserProfileSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(source='id', read_only=True)
+    user_name = serializers.CharField(source='username', read_only=True)
+    user_email = serializers.EmailField(source='email', read_only=True)
+
     class Meta:
         model = User
-        # 응답으로 내려줄 필드들만 선택합니다.
         fields = [
             'id', 'username', 'email', 'phone_number', 
             'address', 'birth_date', 'user_image_url', 
