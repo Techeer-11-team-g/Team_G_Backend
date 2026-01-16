@@ -1,6 +1,6 @@
 from rest_framework import serializers
-from .models import UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping
-from products.models import Product
+from .models import UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping, SelectedProduct
+from products.models import Product, SizeCode
 
 
 class UploadedImageCreateSerializer(serializers.ModelSerializer):
@@ -179,16 +179,48 @@ class ImageAnalysisStatusSerializer(serializers.ModelSerializer):
 # GET /api/v1/analyses/{analysis_id}
 # =============================================================================
 
+class SizeOptionSerializer(serializers.Serializer):
+    """사이즈 옵션 Serializer - 사이즈 값과 재고 정보"""
+    size_code_id = serializers.IntegerField(source='id')
+    size_value = serializers.CharField()
+    inventory = serializers.SerializerMethodField()
+    selected_product_id = serializers.SerializerMethodField()
+
+    def get_inventory(self, obj):
+        """해당 사이즈의 재고 조회"""
+        selected_product = SelectedProduct.objects.filter(
+            product=obj.product,
+            size_code=obj,
+            is_deleted=False
+        ).first()
+        return selected_product.selected_product_inventory if selected_product else 0
+
+    def get_selected_product_id(self, obj):
+        """해당 사이즈의 SelectedProduct ID 조회 (장바구니 추가용)"""
+        selected_product = SelectedProduct.objects.filter(
+            product=obj.product,
+            size_code=obj,
+            is_deleted=False
+        ).first()
+        return selected_product.id if selected_product else None
+
+
 class ProductSerializer(serializers.ModelSerializer):
     """
     상품 정보 Serializer
     분석 결과에서 매칭된 상품 정보를 표시
     """
     image_url = serializers.CharField(source='product_image_url')
+    sizes = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
-        fields = ['id', 'brand_name', 'product_name', 'selling_price', 'image_url', 'product_url']
+        fields = ['id', 'brand_name', 'product_name', 'selling_price', 'image_url', 'product_url', 'sizes']
+
+    def get_sizes(self, obj):
+        """상품의 사이즈 옵션 목록 반환"""
+        size_codes = SizeCode.objects.filter(product=obj, is_deleted=False)
+        return SizeOptionSerializer(size_codes, many=True).data
 
 
 class MatchSerializer(serializers.ModelSerializer):
