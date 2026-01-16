@@ -44,6 +44,13 @@ from services.metrics import (
     push_metrics,
 )
 
+# OpenTelemetry for custom tracing spans
+try:
+    from opentelemetry import trace
+    tracer = trace.get_tracer("analyses.tasks.analysis")
+except ImportError:
+    tracer = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -407,9 +414,21 @@ def _download_image(image_url: str) -> bytes:
 
 
 def _detect_objects(image_bytes: bytes) -> list[DetectedItem]:
-    """Detect fashion items in image."""
-    vision_service = get_vision_service()
-    return vision_service.detect_objects_from_bytes(image_bytes)
+    """Detect fashion items in image using Google Vision API."""
+    # Create span for object detection
+    if tracer:
+        with tracer.start_as_current_span("0_detect_objects_google_vision") as span:
+            span.set_attribute("service", "google_vision_api")
+            span.set_attribute("purpose", "fashion_item_detection")
+            vision_service = get_vision_service()
+            items = vision_service.detect_objects_from_bytes(image_bytes)
+            span.set_attribute("detected_count", len(items))
+            if items:
+                span.set_attribute("categories", ",".join(set(i.category for i in items)))
+            return items
+    else:
+        vision_service = get_vision_service()
+        return vision_service.detect_objects_from_bytes(image_bytes)
 
 
 def _process_detected_item(
@@ -436,38 +455,67 @@ def _process_detected_item(
     Returns:
         Processed item result
     """
+    # Helper for creating spans (handles case when tracer is None)
+    def create_span(name):
+        if tracer:
+            return tracer.start_as_current_span(name)
+        from contextlib import nullcontext
+        return nullcontext()
+
     try:
         # Step 1: Crop image and get pixel bbox
-        cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
+        with create_span("1_crop_image") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("item.index", item_index)
+                span.set_attribute("item.category", detected_item.category)
+            cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
 
         # Step 2: Upload cropped image to GCS
-        cropped_image_url = _upload_to_gcs(
-            image_bytes=cropped_bytes,
-            analysis_id=analysis_id,
-            item_index=item_index,
-            category=detected_item.category,
-        )
+        with create_span("2_upload_to_gcs") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("service", "google_cloud_storage")
+                span.set_attribute("analysis_id", analysis_id)
+            cropped_image_url = _upload_to_gcs(
+                image_bytes=cropped_bytes,
+                analysis_id=analysis_id,
+                item_index=item_index,
+                category=detected_item.category,
+            )
 
-        # Step 3: Extract attributes with GPT-4V
+        # Step 3: Extract attributes with Claude Vision
         from services.gpt4v_service import get_gpt4v_service
-        try:
-            gpt4v_service = get_gpt4v_service()
-            with ANALYSIS_DURATION.labels(stage='extract_attributes').time():
-                attributes = gpt4v_service.extract_attributes(
-                    image_bytes=cropped_bytes,
-                    category=detected_item.category,
-                )
-            logger.info(f"Item {item_index} - GPT-4V attributes: color={attributes.color}, secondary_color={attributes.secondary_color}, brand={attributes.brand}")
-        except Exception as e:
-            logger.warning(f"GPT-4V extraction failed: {e}")
-            attributes = None
+        attributes = None
+        with create_span("3_extract_attributes_claude") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("service", "anthropic_claude")
+                span.set_attribute("purpose", "color_brand_style_extraction")
+            try:
+                gpt4v_service = get_gpt4v_service()
+                with ANALYSIS_DURATION.labels(stage='extract_attributes').time():
+                    attributes = gpt4v_service.extract_attributes(
+                        image_bytes=cropped_bytes,
+                        category=detected_item.category,
+                    )
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("extracted.color", attributes.color or "unknown")
+                    span.set_attribute("extracted.brand", attributes.brand or "unknown")
+                logger.info(f"Item {item_index} - GPT-4V attributes: color={attributes.color}, secondary_color={attributes.secondary_color}, brand={attributes.brand}")
+            except Exception as e:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("error", str(e))
+                logger.warning(f"GPT-4V extraction failed: {e}")
+                attributes = None
 
-        # Step 4: Generate embedding
-        embedding_service = get_embedding_service()
-        with ANALYSIS_DURATION.labels(stage='generate_embedding').time():
-            embedding = embedding_service.get_image_embedding(cropped_bytes)
+        # Step 4: Generate embedding with FashionCLIP
+        with create_span("4_generate_embedding_fashionclip") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("service", "marqo_fashionclip")
+                span.set_attribute("embedding_dim", 512)
+            embedding_service = get_embedding_service()
+            with ANALYSIS_DURATION.labels(stage='generate_embedding').time():
+                embedding = embedding_service.get_image_embedding(cropped_bytes)
 
-        # Step 5: Search similar products
+        # Step 5: Search similar products in OpenSearch
         # Vision API 카테고리 → OpenSearch 카테고리 매핑
         category_mapping = {
             'bottom': 'pants',
@@ -475,45 +523,59 @@ def _process_detected_item(
         }
         search_category = category_mapping.get(detected_item.category, detected_item.category)
 
-        opensearch_service = OpenSearchService()
-
-        # 벡터 검색 → 브랜드/색상 부스팅 방식
         detected_brand = attributes.brand if attributes else None
         detected_color = attributes.color if attributes else None
         detected_secondary = attributes.secondary_color if attributes else None
         detected_item_type = attributes.item_type if attributes else None
 
-        logger.info(f"Item {item_index} - Vector search → brand/color boost (brand={detected_brand}, color={detected_color}, secondary={detected_secondary})")
-        with ANALYSIS_DURATION.labels(stage='search_products').time():
-            search_results = opensearch_service.search_vector_then_filter(
-                embedding=embedding,
-                category=search_category,
-                brand=detected_brand,
-                color=detected_color,
-                secondary_color=detected_secondary,
-                item_type=detected_item_type,
-                k=30,
-                search_k=400,
-            )
+        with create_span("5_search_opensearch_knn") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("service", "opensearch")
+                span.set_attribute("search.category", search_category)
+                span.set_attribute("search.brand", detected_brand or "none")
+                span.set_attribute("search.color", detected_color or "none")
+                span.set_attribute("search.k", 30)
+            opensearch_service = OpenSearchService()
+            logger.info(f"Item {item_index} - Vector search → brand/color boost (brand={detected_brand}, color={detected_color}, secondary={detected_secondary})")
+            with ANALYSIS_DURATION.labels(stage='search_products').time():
+                search_results = opensearch_service.search_vector_then_filter(
+                    embedding=embedding,
+                    category=search_category,
+                    brand=detected_brand,
+                    color=detected_color,
+                    secondary_color=detected_secondary,
+                    item_type=detected_item_type,
+                    k=30,
+                    search_k=400,
+                )
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("results.count", len(search_results) if search_results else 0)
 
         if not search_results:
             logger.warning(f"No matching products found for item {item_index}")
             return None
 
-        # Claude 리랭킹으로 정확도 향상
-        from services.gpt4v_service import get_gpt4v_service
-        try:
-            gpt4v_service = get_gpt4v_service()
-            with ANALYSIS_DURATION.labels(stage='rerank_products').time():
-                search_results = gpt4v_service.rerank_products(
-                    query_image_bytes=cropped_bytes,
-                    candidates=search_results[:10],  # 상위 10개만 리랭킹
-                    top_k=5,
-                )
-            logger.info(f"Item {item_index} - Claude reranking completed")
-        except Exception as e:
-            logger.warning(f"Claude reranking failed, using original results: {e}")
-            search_results = search_results[:5]
+        # Step 6: Claude reranking for better accuracy
+        with create_span("6_rerank_claude") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("service", "anthropic_claude")
+                span.set_attribute("purpose", "visual_reranking")
+                span.set_attribute("candidates_count", min(10, len(search_results)))
+            try:
+                gpt4v_service = get_gpt4v_service()
+                with ANALYSIS_DURATION.labels(stage='rerank_products').time():
+                    search_results = gpt4v_service.rerank_products(
+                        query_image_bytes=cropped_bytes,
+                        candidates=search_results[:10],  # 상위 10개만 리랭킹
+                        top_k=5,
+                    )
+                logger.info(f"Item {item_index} - Claude reranking completed")
+            except Exception as e:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("error", str(e))
+                    span.set_attribute("fallback", "using_original_order")
+                logger.warning(f"Claude reranking failed, using original results: {e}")
+                search_results = search_results[:5]
 
         # 상위 5개 매칭 결과 반환
         top_matches = []

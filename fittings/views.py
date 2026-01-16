@@ -41,6 +41,9 @@ class FittingRequestView(APIView):
     """
     [POST] 가상 피팅 요청
     POST /api/v1/fitting-images
+    
+    동일한 (user_image, product) 조합에 대해 완료된 피팅이 있으면
+    API 호출 없이 기존 결과를 재사용합니다.
     """
     permission_classes = [IsAuthenticated]
 
@@ -51,6 +54,23 @@ class FittingRequestView(APIView):
         )
 
         if serializer.is_valid():
+            user_image = serializer.validated_data.get('user_image_url')  # validate에서 UserImage 객체로 변환됨
+            product = serializer.validated_data.get('product')
+            
+            # 캐싱: 동일한 조합의 완료된 피팅이 있는지 확인
+            existing_fitting = FittingImage.objects.filter(
+                user_image=user_image,
+                product=product,
+                fitting_image_status=FittingImage.Status.DONE,
+                is_deleted=False
+            ).first()
+            
+            if existing_fitting:
+                # 기존 완료된 피팅 결과 재사용 (API 호출 절약)
+                result_serializer = FittingResultSerializer(existing_fitting)
+                return Response(result_serializer.data, status=status.HTTP_200_OK)
+            
+            # 신규 피팅 생성
             fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
             process_fitting_task.delay(fitting.id)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
