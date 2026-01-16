@@ -50,7 +50,7 @@ class FittingImage(models.Model):
     """
     가상 피팅 이미지 테이블
     ERD: fitting_image
-    fashn.ai를 통해 생성된 가상 피팅 결과 이미지
+    The New Black API를 통해 생성된 가상 피팅 결과 이미지
     """
     class Status(models.TextChoices):
         PENDING = 'PENDING', '대기 중'
