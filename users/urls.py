@@ -1,5 +1,6 @@
 from django.urls import path
-from .views import UserOnboardingView, UserMeView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from .views import UserOnboardingView, UserMeView, UserRegisterView
 
 urlpatterns = [
     # 현재 로그인한 본인의 정보 조회 

@@ -23,7 +23,7 @@ __all__ = [
     # Vision
     'VisionService',
     'get_vision_service',
-    # fashn.ai
+    # Virtual Try-On (The New Black)
     'FashnService',
     'get_fashn_service',
     # Embeddings
