@@ -299,17 +299,17 @@ def refine_single_object(
             logger.info(f"Generated detailed text embedding: '{search_text}'")
 
         # 5. 임베딩 결합 - 요청 유형에 따라 비중 조절
-        # - 속성 변경 요청 (색상, 패턴, 스타일 등): 텍스트 80% + 이미지 20% (모양만 참고)
+        # - 속성 변경 요청 (색상, 패턴, 스타일 등): 이미지 50% + 텍스트 50% (형태 유지하면서 속성 변경)
         # - 단순 재검색 (비슷한 거 찾아줘): 이미지 100%
         if has_attribute_change and text_embedding is not None:
             if image_embedding is not None:
-                # 속성 변경: 텍스트 중심 (80%) + 이미지 형태 참고 (20%)
+                # 속성 변경: 이미지 형태 (50%) + 텍스트 속성 (50%)
                 image_arr = np.array(image_embedding)
                 text_arr = np.array(text_embedding)
                 combined = 0.5 * image_arr + 0.5 * text_arr
                 combined = combined / np.linalg.norm(combined)
                 embedding = combined.tolist()
-                logger.info(f"Attribute change: text 80% + image 20%")
+                logger.info(f"Attribute change: image 50% + text 50%")
             else:
                 # 이미지 없으면 텍스트만
                 embedding = text_embedding

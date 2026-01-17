@@ -540,6 +540,18 @@ class HistoryItemSerializer(serializers.ModelSerializer):
                 'fitting_image_url': fitting.fitting_image_url,
             }
 
+        # 사이즈 목록 조회 (selected_product 포함)
+        sizes = []
+        for size_code in product.size_codes.filter(is_deleted=False):
+            # 해당 사이즈의 SelectedProduct 조회
+            selected = size_code.selections.filter(is_deleted=False).first()
+            sizes.append({
+                'size_code_id': size_code.id,
+                'size_value': size_code.size_value,
+                'inventory': selected.selected_product_inventory if selected else 0,
+                'selected_product_id': selected.id if selected else None,
+            })
+
         return {
             'product_id': product.id,
             'product': {
@@ -549,6 +561,7 @@ class HistoryItemSerializer(serializers.ModelSerializer):
                 'selling_price': product.selling_price,
                 'image_url': product.product_image_url,
                 'product_url': product.product_url,
+                'sizes': sizes,
             },
             'fitting': fitting_data,
         }
