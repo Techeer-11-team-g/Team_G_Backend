@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework import mixins
 from rest_framework.pagination import CursorPagination
 from rest_framework.views import APIView
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse
 from django.contrib.auth import get_user_model
 from .models import Order, CartItem
 
@@ -32,6 +33,38 @@ class OrderCursorPagination(CursorPagination):
             'next_cursor': next_cursor,
         })
 
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Orders"],
+        summary="주문 내역 조회",
+        description="현재 로그인한 사용자의 주문 내역을 조회합니다 (커서 기반 페이지네이션).",
+        parameters=[
+            OpenApiParameter("cursor", type=str, description="페이지네이션용 커서"),
+            OpenApiParameter("limit", type=int, default=20, description="페이지당 주문 수"),
+            OpenApiParameter("status", type=str, description="주문 상태 필터링 (paid, preparing, shipping, delivered, canceled)")
+        ]
+    ),
+    create=extend_schema(
+        tags=["Orders"],
+        summary="주문 생성",
+        description="장바구니 항목들을 바탕으로 새로운 주문을 생성합니다.",
+        request=OrderCreateSerializer,
+        responses={201: OrderSerializer}
+    ),
+    retrieve=extend_schema(
+        tags=["Orders"],
+        summary="주문 상세 조회",
+        description="특정 주문의 상세 정보를 조회합니다.",
+        responses={200: OrderDetailSerializer}
+    ),
+    partial_update=extend_schema(
+        tags=["Orders"],
+        summary="주문 취소",
+        description="배송 시작 전인 주문을 취소합니다.",
+        request=OrderCancelSerializer,
+        responses={200: OpenApiResponse(description="취소 성공 응답")}
+    )
+)
 class OrderViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = OrderCursorPagination # 위에서 만든 클래스 연결 
@@ -76,6 +109,21 @@ class CartItemListCreateView(APIView):
     """
     permission_classes = [permissions.IsAuthenticated]
 
+    @extend_schema(
+        tags=["Orders"],
+        summary="장바구니 조회",
+        description="현재 로그인한 사용자의 장바구니 항목들을 조회합니다.",
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'items': { 'type': 'array', 'items': { '$ref': '#/components/schemas/CartItem' } },
+                    'total_quantity': { 'type': 'integer' },
+                    'total_price': { 'type': 'integer' }
+                }
+            }
+        }
+    )
     def get(self, request):
         """장바구니 조회"""
         user = request.user
@@ -99,6 +147,13 @@ class CartItemListCreateView(APIView):
             'total_price': total_price
         })
 
+    @extend_schema(
+        tags=["Orders"],
+        summary="장바구니 추가",
+        description="특정 상품(사이즈 포함)을 장바구니에 추가합니다. 이미 있으면 수량이 증가합니다.",
+        request=CartItemCreateSerializer,
+        responses={201: CartItemCreateSerializer}
+    )
     def post(self, request):
         """장바구니 추가"""
         serializer = CartItemCreateSerializer(data=request.data, context={'request': request})
@@ -114,6 +169,12 @@ class CartItemDeleteView(APIView):
     """
     permission_classes = [permissions.IsAuthenticated]
 
+    @extend_schema(
+        tags=["Orders"],
+        summary="장바구니 상품 삭제",
+        description="장바구니에서 특정 항목을 삭제(Soft Delete)합니다.",
+        responses={244: None}
+    )
     def delete(self, request, cart_item_id):
         """장바구니 상품 삭제 (Soft Delete)"""
         user = request.user

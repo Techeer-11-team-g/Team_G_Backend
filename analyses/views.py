@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiExample
 
 from services.metrics import IMAGES_UPLOADED_TOTAL
 
@@ -64,6 +65,25 @@ class UploadedImageView(APIView):
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="이미지 업로드",
+        description="분석할 이미지를 업로드합니다 (최대 10MB).",
+        request={
+            'multipart/form-data': {
+                'type': 'object',
+                'properties': {
+                    'file': {
+                        'type': 'string',
+                        'format': 'binary',
+                        'description': '분석할 이미지 파일 (JPG, PNG, WEBP)'
+                    }
+                },
+                'required': ['file']
+            }
+        },
+        responses={201: UploadedImageResponseSerializer}
+    )
     def post(self, request):
         """
         이미지 업로드 (Celery 비동기 처리)
@@ -148,6 +168,24 @@ class UploadedImageView(APIView):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="업로드 이미지 이력 조회",
+        description="사용자가 업로드한 이미지들의 이력을 조회합니다 (커서 기반 페이지네이션).",
+        parameters=[
+            OpenApiParameter("cursor", type=int, description="이전 페이지의 마지막 ID (첫 페이지는 비워둠)"),
+            OpenApiParameter("limit", type=int, default=10, description="한 페이지당 아이템 수")
+        ],
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'items': { 'type': 'array', 'items': { '$ref': '#/components/schemas/UploadedImageList' } },
+                    'next_cursor': { 'type': 'integer', 'nullable': True }
+                }
+            }
+        }
+    )
     def get(self, request):
         """
         업로드 이미지 이력 조회
@@ -196,6 +234,13 @@ class ImageAnalysisView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="자연어 기반 결과 수정 (재분석)",
+        description="사용자의 자연어 요청에 따라 특정 카테고리나 객체를 다시 검색합니다.",
+        request=AnalysisRefineRequestSerializer,
+        responses={200: AnalysisRefineResponseSerializer}
+    )
     def patch(self, request):
         """
         자연어 기반 결과 수정 (API 6)
@@ -351,6 +396,13 @@ class ImageAnalysisView(APIView):
         response_serializer = AnalysisRefineResponseSerializer(analysis)
         return Response(response_serializer.data)
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="이미지 분석 시작",
+        description="업로드된 이미지를 기반으로 AI 분석을 시작합니다 (비동기 처리).",
+        request=ImageAnalysisCreateSerializer,
+        responses={201: ImageAnalysisResponseSerializer}
+    )
     def post(self, request):
         """
         이미지 분석 시작
@@ -415,6 +467,15 @@ class AnalysisRefineStatusView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="자연어 재분석 상태 조회",
+        description="요청한 재분석 작업의 현재 진행 상태를 조회합니다.",
+        parameters=[
+            OpenApiParameter("refine_id", type=str, required=True, description="재분석 요청 시 발급받은 UUID")
+        ],
+        responses={200: OpenApiResponse(description="작업 상태 정보")}
+    )
     def get(self, request, analysis_id):
         """
         재분석 작업 상태 조회
@@ -472,6 +533,12 @@ class ImageAnalysisStatusView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="이미지 분석 상태 조회",
+        description="이미지 분석 작업의 현재 상태(PENDING, RUNNING, DONE, FAILED) 및 진행률을 조회합니다.",
+        responses={200: ImageAnalysisStatusSerializer}
+    )
     def get(self, request, analysis_id):
         """
         이미지 분석 상태 조회
@@ -512,6 +579,12 @@ class ImageAnalysisResultView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="이미지 분석 결과 조회",
+        description="완료된 이미지 분석 결과 (검출된 객체 및 매칭 상품 정보)를 조회합니다.",
+        responses={200: ImageAnalysisResultSerializer}
+    )
     def get(self, request, analysis_id):
         """
         이미지 분석 결과 조회
@@ -565,6 +638,24 @@ class UploadedImageHistoryView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        tags=["Analyses"],
+        summary="통합 히스토리 조회",
+        description="업로드된 이미지에 대한 검출 객체, 매칭 상품, 피팅 정보를 통합 조회합니다.",
+        parameters=[
+            OpenApiParameter("cursor", type=str, description="페이지네이션용 커서"),
+            OpenApiParameter("limit", type=int, default=10, description="페이지당 아이템 수")
+        ],
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'items': { 'type': 'array', 'items': { '$ref': '#/components/schemas/HistoryItem' } },
+                    'next_cursor': { 'type': 'string', 'nullable': True }
+                }
+            }
+        }
+    )
     def get(self, request, uploaded_image_id):
         """
         통합 히스토리 조회

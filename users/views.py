@@ -12,6 +12,7 @@ class UserRegisterView(APIView):
     """회원가입 API"""
     permission_classes = [AllowAny]
 
+    @extend_schema(tags=["Users"], summary="회원가입", description="신규 사용자를 등록하고 인증 토큰을 발급합니다.")
     def post(self, request):
         serializer = UserRegisterSerializer(data=request.data)
         if serializer.is_valid(raise_exception=True):
@@ -34,6 +35,7 @@ class UserOnboardingView(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
+        tags=["Users"],
         summary="사용자 필수 정보 등록 (온보딩)",
         description="신규 사용자의 이메일, 주소, 결제 수단, 전화번호를 등록합니다.",
         request=UserOnboardingSerializer,
@@ -89,11 +91,13 @@ class UserOnboardingView(APIView):
 class UserMeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(tags=["Users"], summary="사용자 정보 조회", description="현재 로그인한 사용자의 프로필 정보를 조회합니다.")
     def get(self, request):
         """사용자 정보 조회"""
         serializer = UserProfileSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @extend_schema(tags=["Users"], summary="사용자 정보 수정", description="현재 로그인한 사용자의 프로필 정보를 수정합니다.")
     def patch(self, request):
         """사용자 정보 수정"""
         # 수정 시에도 UserProfileSerializer를 사용할지, 별도 Serializer를 사용할지 결정 필요
