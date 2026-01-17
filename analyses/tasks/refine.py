@@ -189,6 +189,8 @@ def refine_single_object(
         detected_obj = DetectedObject.objects.get(id=detected_object_id, is_deleted=False)
 
         # 2. 파싱된 쿼리에서 필터 정보 추출
+        search_keywords = parsed_query.get('search_keywords')  # 자연어 검색 키워드
+        style_keywords = parsed_query.get('style_keywords') or []  # 스타일 키워드 리스트
         color_filter = parsed_query.get('color_filter')
         pattern_filter = parsed_query.get('pattern_filter')
         style_vibe = parsed_query.get('style_vibe')
@@ -237,8 +239,9 @@ def refine_single_object(
 
         # 4. 텍스트 임베딩 생성 - 상세한 설명으로 구성
         text_embedding = None
-        has_attribute_change = (color_filter or pattern_filter or style_vibe or
-                                sleeve_length or pants_length or outer_length or material_filter)
+        has_attribute_change = (search_keywords or style_keywords or color_filter or
+                                pattern_filter or style_vibe or sleeve_length or
+                                pants_length or outer_length or material_filter)
         if has_attribute_change:
             # FashionCLIP에 최적화된 상세 설명 생성
             # 예: "black long sleeve cotton casual top" 또는 "brown wool long formal outer"
@@ -272,6 +275,14 @@ def refine_single_object(
             if style_vibe:
                 description_parts.append(style_vibe)
 
+            # 스타일 키워드 (리스트)
+            if style_keywords:
+                description_parts.extend(style_keywords)
+
+            # 자연어 검색 키워드 (가장 중요 - 사용자가 직접 입력한 내용)
+            if search_keywords:
+                description_parts.append(search_keywords)
+
             # 카테고리
             category_names = {
                 'top': 'top shirt',
@@ -295,7 +306,7 @@ def refine_single_object(
                 # 속성 변경: 텍스트 중심 (80%) + 이미지 형태 참고 (20%)
                 image_arr = np.array(image_embedding)
                 text_arr = np.array(text_embedding)
-                combined = 0.2 * image_arr + 0.8 * text_arr
+                combined = 0.5 * image_arr + 0.5 * text_arr
                 combined = combined / np.linalg.norm(combined)
                 embedding = combined.tolist()
                 logger.info(f"Attribute change: text 80% + image 20%")

@@ -657,6 +657,7 @@ def _crop_image(image_bytes: bytes, item: DetectedItem, padding_ratio: float = 0
     y_max = int(bbox.y_max * height / 1000)
 
     # Original pixel bbox for storage (without padding)
+    # 원본 이미지 크기도 포함 (정규화용)
     pixel_bbox = {
         'x_min': x_min,
         'y_min': y_min,
@@ -664,6 +665,8 @@ def _crop_image(image_bytes: bytes, item: DetectedItem, padding_ratio: float = 0
         'y_max': y_max,
         'width': x_max - x_min,
         'height': y_max - y_min,
+        'image_width': width,    # 원본 이미지 너비
+        'image_height': height,  # 원본 이미지 높이
     }
 
     # Add padding for better embedding (more context helps CLIP)
@@ -708,23 +711,19 @@ def _save_analysis_results(
         analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
         uploaded_image = analysis.uploaded_image
 
-        # 이미지 크기 가져오기 (정규화용)
-        try:
-            img = Image.open(uploaded_image.uploaded_image_url.path)
-            img_width, img_height = img.size
-        except Exception as e:
-            logger.warning(f"Could not get image size: {e}, using default 1000x1000")
-            img_width, img_height = 1000, 1000
-
         # 2. 각 검출 결과에 대해 DetectedObject 및 매핑 생성
         for result in results:
             # bbox를 0-1 범위로 정규화
+            # 이미지 크기는 결과에 포함된 값 사용 (GCS 이미지라서 로컬에서 못 열 수 있음)
             bbox = result.get('bbox', {})
+            img_width = bbox.get('image_width', 1000)
+            img_height = bbox.get('image_height', 1000)
+
             normalized_bbox = {
-                'x1': bbox.get('x_min', 0) / img_width,
-                'y1': bbox.get('y_min', 0) / img_height,
-                'x2': bbox.get('x_max', 0) / img_width,
-                'y2': bbox.get('y_max', 0) / img_height,
+                'x1': bbox.get('x_min', 0) / img_width if img_width > 0 else 0,
+                'y1': bbox.get('y_min', 0) / img_height if img_height > 0 else 0,
+                'x2': bbox.get('x_max', 0) / img_width if img_width > 0 else 0,
+                'y2': bbox.get('y_max', 0) / img_height if img_height > 0 else 0,
             }
 
             # DetectedObject 생성
