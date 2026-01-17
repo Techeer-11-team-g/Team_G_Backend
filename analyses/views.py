@@ -284,11 +284,38 @@ class ImageAnalysisView(APIView):
                 'style_keywords': [],
             }
 
-        # 5. 대상 카테고리 필터링
-        target_categories = parsed_query.get('target_categories', available_categories)
-        target_objects = detected_objects.filter(object_category__in=target_categories)
+        # 5. 대상 카테고리 필터링 (LangChain 출력 → DB 카테고리 매핑)
+        target_categories = parsed_query.get('target_categories', [])
 
-        if not target_objects.exists():
+        if target_categories:
+            # 카테고리 매핑: LangChain 출력값 → DB에 저장된 object_category 값들
+            category_aliases = {
+                'pants': ['pants', 'bottom', '하의', '바지'],
+                'bottom': ['pants', 'bottom', '하의', '바지'],
+                'top': ['top', '상의', '티셔츠', '셔츠'],
+                'outer': ['outer', 'outerwear', '아우터', '자켓', '코트'],
+                'outerwear': ['outer', 'outerwear', '아우터', '자켓', '코트'],
+                'shoes': ['shoes', '신발', '운동화', '스니커즈'],
+                'bag': ['bag', '가방'],
+            }
+
+            # 매핑된 카테고리 목록 생성
+            mapped_categories = set()
+            for cat in target_categories:
+                cat_lower = cat.lower()
+                if cat_lower in category_aliases:
+                    mapped_categories.update(category_aliases[cat_lower])
+                else:
+                    mapped_categories.add(cat)
+
+            target_objects = detected_objects.filter(object_category__in=list(mapped_categories))
+            logger.info(f"Target categories: {target_categories} → mapped: {mapped_categories}, found {target_objects.count()} objects")
+
+            # 매칭되는 객체가 없으면 전체 대상
+            if not target_objects.exists():
+                target_objects = detected_objects
+                logger.info(f"No objects matched categories, using all {target_objects.count()} objects")
+        else:
             target_objects = detected_objects
 
         target_object_ids = list(target_objects.values_list('id', flat=True))

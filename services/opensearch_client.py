@@ -300,6 +300,12 @@ class OpenSearchService:
         # 1. 카테고리 필터 없이 넓게 검색 (순수 벡터 유사도)
         query = {
             'size': search_k,
+            '_source': [
+                'itemId', 'category', 'brand', 'productName', 'imageUrl', 'price', 'productUrl',
+                'attributes.colors', 'attributes.pattern', 'attributes.style_vibe',
+                'attributes.sleeve_length', 'attributes.pants_length', 'attributes.outer_length',
+                'attributes.materials'
+            ],
             'query': {
                 'knn': {
                     'image_vector': {
@@ -320,16 +326,27 @@ class OpenSearchService:
         all_results = []  # 카테고리 무관 전체 결과 (fallback용)
 
         for hit in response['hits']['hits']:
-            product_category = hit['_source'].get('category')
+            src = hit['_source']
+            product_category = src.get('category')
+            attributes = src.get('attributes', {})
+
             result_item = {
-                'product_id': hit['_source'].get('itemId'),
+                'product_id': src.get('itemId'),
                 'score': hit['_score'],
                 'category': product_category,
-                'brand': hit['_source'].get('brand'),
-                'name': hit['_source'].get('productName'),
-                'image_url': hit['_source'].get('imageUrl'),
-                'price': hit['_source'].get('price'),
-                'product_url': hit['_source'].get('productUrl'),
+                'brand': src.get('brand'),
+                'name': src.get('productName'),
+                'image_url': src.get('imageUrl'),
+                'price': src.get('price'),
+                'product_url': src.get('productUrl'),
+                # 속성 필드 추가
+                'colors': attributes.get('colors', []),
+                'pattern': attributes.get('pattern'),
+                'style_vibe': attributes.get('style_vibe'),
+                'sleeve_length': attributes.get('sleeve_length'),
+                'pants_length': attributes.get('pants_length'),
+                'outer_length': attributes.get('outer_length'),
+                'materials': attributes.get('materials', []),
             }
 
             all_results.append(result_item)

@@ -32,7 +32,7 @@ class OrderCursorPagination(CursorPagination):
             'next_cursor': next_cursor,
         })
 
-class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
+class OrderViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = OrderCursorPagination # 위에서 만든 클래스 연결 
 

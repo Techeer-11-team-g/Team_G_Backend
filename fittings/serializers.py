@@ -101,15 +101,20 @@ class FittingImageSerializer(serializers.ModelSerializer):
         - DB 레벨에서 필터링하여 성능 최적화
         """
         from django.db.models import Q
-        
+        import re
+
         # URL에서 경로 부분 추출 (전체 URL 또는 상대 경로 모두 지원)
-        # 예: "https://example.com/media/user-images/1.jpg" -> "user-images/1.jpg"
         search_value = value
-        if '/media/' in value:
+
+        # GCS URL 패턴: https://storage.googleapis.com/{bucket}/{path}
+        gcs_match = re.match(r'https://storage\.googleapis\.com/[^/]+/(.+)', value)
+        if gcs_match:
+            search_value = gcs_match.group(1)
+        elif '/media/' in value:
             search_value = value.split('/media/')[-1]
         elif value.startswith('/'):
             search_value = value.lstrip('/')
-        
+
         # DB 레벨에서 LIKE 쿼리로 필터링 (전체 순회 대신)
         user_image = UserImage.objects.filter(
             Q(user_image_url__exact=value) |

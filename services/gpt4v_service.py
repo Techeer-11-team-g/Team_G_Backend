@@ -37,25 +37,32 @@ class FashionAttributes:
     brand: Optional[str] = None
     item_type: Optional[str] = None  # sneakers, slides, t-shirt, hoodie, etc.
     description: Optional[str] = None
+    # 길이 속성 추가
+    sleeve_length: Optional[str] = None  # long_sleeve, short_sleeve, sleeveless
+    pants_length: Optional[str] = None   # long, shorts, cropped
+    outer_length: Optional[str] = None   # long, regular, cropped
 
 
 class GPT4VService:
     """Vision service for fashion attribute extraction (Claude 3.5 Sonnet)."""
 
     EXTRACTION_PROMPT = """Analyze this fashion item image and extract the following attributes.
-Be specific and accurate. If you can't determine something, say "unknown".
+Be specific and accurate. If you can't determine something, say "unknown" or null.
 
 Return ONLY a JSON object with these fields:
 {
-    "color": "primary color (e.g., navy blue, black, white, beige)",
+    "color": "primary color (black, white, gray, navy, blue, red, pink, brown, beige, green, yellow, orange, purple)",
     "secondary_color": "secondary color if any, or null",
-    "material": "fabric type (e.g., cotton, denim, leather, knit, polyester)",
-    "style": "style category (casual, formal, sporty, streetwear, vintage, minimalist)",
+    "material": "fabric type (cotton, denim, leather, wool, silk, nylon, velvet, linen, fur, mesh, canvas, suede)",
+    "style": "style category (casual, formal, sporty, vintage, minimal, streetwear, luxury, cute)",
     "fit": "fit type (slim, regular, loose, oversized)",
-    "pattern": "pattern type (solid, striped, checkered, floral, graphic, logo)",
+    "pattern": "pattern type (solid, stripe, check, floral, graphic, dot, camo, animal)",
     "brand": "brand name if visible (from logos, text, or recognizable design), or null",
     "item_type": "specific item type (e.g., sneakers, slides, boots, loafers for shoes / t-shirt, hoodie, jacket for tops)",
-    "description": "brief 2-3 word description of the item"
+    "description": "brief 2-3 word description of the item",
+    "sleeve_length": "for tops/outer only: long_sleeve, short_sleeve, or sleeveless (null for other categories)",
+    "pants_length": "for pants only: long, shorts, or cropped (null for other categories)",
+    "outer_length": "for outer only: long, regular, or cropped (null for other categories)"
 }
 
 Important:
@@ -63,7 +70,10 @@ Important:
 - Common brands: Nike, Adidas, Zara, H&M, Uniqlo, North Face, etc.
 - If you see a swoosh, it's Nike. Three stripes is Adidas. etc.
 - Be confident in brand detection when visual evidence is clear
-- For shoes: distinguish between sneakers, slides/slippers, boots, loafers, sandals, etc."""
+- For shoes: distinguish between sneakers, slides/slippers, boots, loafers, sandals, etc.
+- For sleeve_length: only provide for tops (shirts, t-shirts) and outer (jackets, coats)
+- For pants_length: only provide for pants/bottoms
+- For outer_length: only provide for outer items (jackets, coats, cardigans)"""
 
     def __init__(self):
         """Initialize Claude Opus service."""
@@ -162,6 +172,9 @@ Important:
                     brand=data.get('brand'),
                     item_type=data.get('item_type'),
                     description=data.get('description'),
+                    sleeve_length=data.get('sleeve_length'),
+                    pants_length=data.get('pants_length'),
+                    outer_length=data.get('outer_length'),
                 )
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse JSON from GPT-4V response: {e}")

@@ -259,7 +259,7 @@ if GCS_BUCKET_NAME and GCS_CREDENTIALS_FILE and os.path.exists(GCS_CREDENTIALS_F
     GS_BUCKET_NAME = GCS_BUCKET_NAME
     GS_PROJECT_ID = GCS_PROJECT_ID
     GS_CREDENTIALS = service_account.Credentials.from_service_account_file(GCS_CREDENTIALS_FILE)
-    GS_DEFAULT_ACL = 'publicRead'  # 파일을 공개로 설정 (The New Black API 접근용)
+    GS_DEFAULT_ACL = None  # Uniform bucket-level access 사용 시 ACL 비활성화
     GS_QUERYSTRING_AUTH = False
 
 MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
