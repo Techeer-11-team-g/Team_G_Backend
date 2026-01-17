@@ -697,6 +697,8 @@ class UploadedImageHistoryView(APIView):
         ).prefetch_related(
             'product_mappings',
             'product_mappings__product',
+            'product_mappings__product__size_codes',
+            'product_mappings__product__size_codes__selections',
         ).order_by('-id')
 
         # 4. 커서 기반 페이지네이션
