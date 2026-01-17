@@ -94,9 +94,9 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class OrderItemDetailSerializer(serializers.ModelSerializer):
     order_item_id = serializers.IntegerField(source='id')
-    selected_product_id = serializers.IntegerField(source='product_item.id')
-    product_name = serializers.CharField(source='product_item.product.product_name')
-    
+    selected_product_id = serializers.IntegerField(source='selected_product.id')
+    product_name = serializers.CharField(source='selected_product.product.product_name')
+
     class Meta:
         model = OrderItem
         fields = ['order_item_id', 'order_status', 'selected_product_id', 'purchased_quantity', 'price_at_order', 'product_name']
@@ -156,8 +156,9 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         cart_item_ids = validated_data.pop('cart_item_ids')
-        user_id = validated_data.pop('user_id') # validated but not used for creation as we use request.user 
-        
+        user_id = validated_data.pop('user_id')
+        payment_method = validated_data.pop('payment_method')  # pop but not used (for future use)
+
         user = self.context['request'].user
         
         # 주소가 없는 경우 예외 처리 또는 기본값 설정 (User 모델에 주소가 있다고 가정)

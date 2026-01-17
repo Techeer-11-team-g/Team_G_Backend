@@ -386,6 +386,19 @@ class AnalysisRefineItemSerializer(serializers.ModelSerializer):
         mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
         if mapping:
             product = mapping.product
+            # 사이즈 정보 조회
+            size_codes = SizeCode.objects.filter(product=product, is_deleted=False)
+            sizes = []
+            for sc in size_codes:
+                selected_product = SelectedProduct.objects.filter(
+                    product=product, size_code=sc, is_deleted=False
+                ).first()
+                sizes.append({
+                    'size_code_id': sc.id,
+                    'size_value': sc.size_value,
+                    'inventory': selected_product.selected_product_inventory if selected_product else 0,
+                    'selected_product_id': selected_product.id if selected_product else None,
+                })
             return {
                 'product_id': product.id,
                 'product': {
@@ -395,6 +408,7 @@ class AnalysisRefineItemSerializer(serializers.ModelSerializer):
                     'selling_price': product.selling_price,
                     'image_url': product.product_image_url,
                     'product_url': product.product_url,
+                    'sizes': sizes,
                 }
             }
         return None
