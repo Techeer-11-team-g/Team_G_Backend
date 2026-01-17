@@ -124,10 +124,12 @@ def process_image_analysis(
 
     try:
         # Update status to RUNNING
+        # (Redis 임시 저장: 실시간 진행률 표시용)
         redis_service.update_analysis_running(analysis_id, progress=0)
         logger.info(f"Starting analysis {analysis_id}")
 
         # Step 1: Download image from GCS
+        # (Redis 임시 저장: 단계별 진행률 업데이트)
         redis_service.set_analysis_progress(analysis_id, 10)
         with ANALYSIS_DURATION.labels(stage='download_image').time():
             image_bytes = _download_image(image_url)
@@ -139,6 +141,7 @@ def process_image_analysis(
         logger.info(f"Detected {len(detected_items)} items")
 
         if not detected_items:
+            # (Redis 임시 저장: 결과 캐싱 및 완료 상태)
             redis_service.update_analysis_done(analysis_id, {'items': []})
             _update_analysis_status_db(analysis_id, 'DONE')
             return {'analysis_id': analysis_id, 'items': []}
@@ -235,6 +238,7 @@ def process_single_item(
         )
 
         # 진행률 업데이트
+        # (Redis 임시 저장: 개별 아이템 처리 완료 카운트, 1시간 TTL)
         completed_key = f"analysis:{analysis_id}:completed"
         current = redis_service.get(completed_key) or "0"
         redis_service.set(completed_key, str(int(current) + 1), ttl=3600)
@@ -267,16 +271,30 @@ def analysis_complete_callback(
     Returns:
         Final analysis result
     """
+    from contextlib import nullcontext
+
+    def create_span(name):
+        if tracer:
+            return tracer.start_as_current_span(name)
+        return nullcontext()
+
     redis_service = get_redis_service()
 
     try:
         # None 결과 필터링
         valid_results = [r for r in results if r is not None]
 
-        # DB에 결과 저장
-        redis_service.set_analysis_progress(analysis_id, 90)
-        with ANALYSIS_DURATION.labels(stage='save_results').time():
-            _save_analysis_results(analysis_id, valid_results, user_id)
+        # DB에 결과 저장 (with tracing)
+        with create_span("7_save_results_to_db") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("analysis_id", analysis_id)
+                span.set_attribute("valid_results_count", len(valid_results))
+                span.set_attribute("total_items", total_items)
+                span.set_attribute("service", "mysql")
+
+            redis_service.set_analysis_progress(analysis_id, 90)
+            with ANALYSIS_DURATION.labels(stage='save_results').time():
+                _save_analysis_results(analysis_id, valid_results, user_id)
 
         # 완료 상태 업데이트
         redis_service.update_analysis_done(analysis_id, {'items': valid_results})

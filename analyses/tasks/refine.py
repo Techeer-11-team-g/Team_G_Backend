@@ -66,7 +66,7 @@ def process_refine_analysis(
     Celery Group을 사용하여 여러 객체를 병렬 처리합니다.
 
     Args:
-        refine_id: 재분석 작업 ID (UUID)
+        refine_id: 재분석 작업 ID (UUID) - DB에 저장되지 않는 Redis 임시 키 (작업 추적용)
         analysis_id: 원본 분석 ID
         target_object_ids: 재검색 대상 DetectedObject ID 목록
         parsed_query: LangChain으로 파싱된 쿼리 정보
@@ -82,6 +82,7 @@ def process_refine_analysis(
 
     try:
         # 1. 상태 업데이트: RUNNING
+        # (Redis 임시 저장: 작업 상태 추적용, 1시간 후 만료)
         redis_service.set(f"refine:{refine_id}:status", "RUNNING", ttl=3600)
         redis_service.set(f"refine:{refine_id}:progress", "0", ttl=3600)
         redis_service.set(f"refine:{refine_id}:total", str(len(target_object_ids)), ttl=3600)
@@ -109,6 +110,7 @@ def process_refine_analysis(
 
     except Exception as e:
         logger.error(f"Refine analysis {refine_id} failed to start: {e}")
+        # (Redis 임시 저장: 실패 상태 기록)
         redis_service.set(f"refine:{refine_id}:status", "FAILED", ttl=3600)
         redis_service.set(f"refine:{refine_id}:error", str(e), ttl=3600)
         raise self.retry(exc=e)

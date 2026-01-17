@@ -8,6 +8,21 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
 
 from services.metrics import IMAGES_UPLOADED_TOTAL
+
+# OpenTelemetry for custom tracing spans
+try:
+    from opentelemetry import trace
+    tracer = trace.get_tracer("analyses.views")
+except ImportError:
+    tracer = None
+
+
+def create_span(name):
+    """Helper for creating spans (handles case when tracer is None)."""
+    if tracer:
+        return tracer.start_as_current_span(name)
+    from contextlib import nullcontext
+    return nullcontext()
 from .models import UploadedImage, ImageAnalysis, ObjectProductMapping, DetectedObject
 from .serializers import (
     UploadedImageCreateSerializer,
@@ -28,6 +43,13 @@ from .tasks import (
     upload_image_to_gcs_task,
 )
 from services import get_redis_service
+
+# OpenTelemetry Tracer 설정
+try:
+    from opentelemetry import trace
+    tracer = trace.get_tracer("analyses.views.uploaded_image")
+except ImportError:
+    tracer = None
 
 logger = logging.getLogger(__name__)
 
@@ -53,53 +75,78 @@ class UploadedImageView(APIView):
         """
         import base64
 
-        # 1. 파일 유효성 검사
-        file = request.FILES.get('file')
-        if not file:
-            return Response(
-                {'error': {'file': ['파일이 필요합니다.']}},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        with create_span("api_upload_image") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("http.method", "POST")
+                span.set_attribute("api.endpoint", "/api/v1/uploaded-images")
 
-        # 파일 크기 제한: 10MB
-        if file.size > 10 * 1024 * 1024:
-            return Response(
-                {'error': {'file': ['파일 크기는 10MB 이하여야 합니다.']}},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            # 1. 파일 유효성 검사
+            file = request.FILES.get('file')
+            if not file:
+                return Response(
+                    {'error': {'file': ['파일이 필요합니다.']}},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        # 허용된 파일 형식 검사
-        allowed_types = ['image/jpeg', 'image/png', 'image/webp']
-        if file.content_type not in allowed_types:
-            return Response(
-                {'error': {'file': ['JPG, PNG, WEBP 파일만 업로드 가능합니다.']}},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            # 파일 크기 제한: 10MB
+            if file.size > 10 * 1024 * 1024:
+                return Response(
+                    {'error': {'file': ['파일 크기는 10MB 이하여야 합니다.']}},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        # 2. 파일을 Base64로 인코딩 (Celery 전달용)
-        file_bytes = file.read()
-        image_b64 = base64.b64encode(file_bytes).decode('utf-8')
+            # 허용된 파일 형식 검사
+            allowed_types = ['image/jpeg', 'image/png', 'image/webp']
+            if file.content_type not in allowed_types:
+                return Response(
+                    {'error': {'file': ['JPG, PNG, WEBP 파일만 업로드 가능합니다.']}},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        # 3. 사용자 ID 가져오기
-        user_id = request.user.id if request.user.is_authenticated else None
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("file.name", file.name)
+                span.set_attribute("file.size", file.size)
+                span.set_attribute("file.content_type", file.content_type)
 
-        # 4. Celery 태스크로 GCS 업로드 (외부 API 호출)
-        try:
-            result = upload_image_to_gcs_task.apply_async(
-                args=[image_b64, file.name, file.content_type, user_id]
-            ).get(timeout=60)  # 60초 타임아웃
+            # 2. 파일을 Base64로 인코딩 (Celery 전달용)
+            file_bytes = file.read()
+            image_b64 = base64.b64encode(file_bytes).decode('utf-8')
 
-            logger.info(f"Image uploaded via Celery: {result.get('uploaded_image_id')}")
-            IMAGES_UPLOADED_TOTAL.inc()
+            # 3. 사용자 ID 가져오기
+            user_id = request.user.id if request.user.is_authenticated else None
 
-            return Response(result, status=status.HTTP_201_CREATED)
+            # 4. Celery 태스크로 GCS 업로드 (외부 API 호출)
+            try:
+                result = upload_image_to_gcs_task.apply_async(
+                    args=[image_b64, file.name, file.content_type, user_id]
+                ).get(timeout=60)  # 60초 타임아웃
 
-        except Exception as e:
-            logger.error(f"Failed to upload image: {e}")
-            return Response(
-                {'error': f'이미지 업로드 중 오류가 발생했습니다: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                logger.info(f"Image uploaded via Celery: {result.get('uploaded_image_id')}")
+                IMAGES_UPLOADED_TOTAL.inc()
+
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("uploaded_image_id", result.get('uploaded_image_id'))
+                    span.set_attribute("status", "success")
+
+                return Response(result, status=status.HTTP_201_CREATED)
+
+            except Exception as e:
+                # 1. 로그 기록 (개발자/운영자용): 텍스트 로그 파일에 남겨서 나중에 원인 분석
+                logger.error(f"Failed to upload image: {e}")
+
+                # 2. 트레이스 기록 (모니터링용 - OpenTelemetry):
+                #    - OTel 라이브러리가 로드되어 있고(status), Span이 생성된 상태라면 에러 정보를 태그로 부착
+                #    - Jaeger 같은 모니터링 도구에서 '빨간색(Failed)'으로 시각화되어 쉽게 확인 가능
+                #    - 만약 OTel이 설정 안 되어 있다면 span은 빈 껍데기(No-op) 객체이거나 None이므로 안전하게 무시됨(hasattr 체크)
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("error", str(e))
+                    span.set_attribute("status", "failed")
+
+                # 3. 사용자 응답 (프론트엔드용): 500 에러와 함께 안내 메시지 전달
+                return Response(
+                    {'error': f'이미지 업로드 중 오류가 발생했습니다: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
     def get(self, request):
         """
@@ -284,40 +331,54 @@ class ImageAnalysisView(APIView):
         Request Body: { uploaded_image_id: int, uploaded_image_url: string }
         Response 201: { analysis_id, status, polling: { status_url, result_url } }
         """
-        serializer = ImageAnalysisCreateSerializer(data=request.data)
+        with create_span("api_start_analysis") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("http.method", "POST")
+                span.set_attribute("api.endpoint", "/api/v1/analyses")
 
-        if not serializer.is_valid():
+            serializer = ImageAnalysisCreateSerializer(data=request.data)
+
+            if not serializer.is_valid():
+                return Response(
+                    {'error': serializer.errors},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # ImageAnalysis 레코드 생성
+            analysis = serializer.save()
+
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("analysis_id", analysis.id)
+                span.set_attribute("uploaded_image_id", analysis.uploaded_image.id)
+
+            # 이미지 URL 가져오기
+            uploaded_image = analysis.uploaded_image
+            image_url = request.data.get('uploaded_image_url')
+            if not image_url and uploaded_image.uploaded_image_url:
+                image_url = uploaded_image.uploaded_image_url.url
+
+            # Celery task 트리거
+            try:
+                process_image_analysis.delay(
+                    analysis_id=str(analysis.id),
+                    image_url=image_url,
+                    user_id=request.user.id if request.user.is_authenticated else None,
+                )
+                logger.info(f"Analysis task triggered: {analysis.id}")
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("task_triggered", True)
+            except Exception as e:
+                logger.error(f"Failed to trigger analysis task: {e}")
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("task_triggered", False)
+                    span.set_attribute("error", str(e))
+                # 실패해도 일단 응답은 반환 (상태는 PENDING으로 유지)
+
+            response_serializer = ImageAnalysisResponseSerializer(analysis)
             return Response(
-                {'error': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST
+                response_serializer.data,
+                status=status.HTTP_201_CREATED
             )
-
-        # ImageAnalysis 레코드 생성
-        analysis = serializer.save()
-
-        # 이미지 URL 가져오기
-        uploaded_image = analysis.uploaded_image
-        image_url = request.data.get('uploaded_image_url')
-        if not image_url and uploaded_image.uploaded_image_url:
-            image_url = uploaded_image.uploaded_image_url.url
-
-        # Celery task 트리거
-        try:
-            process_image_analysis.delay(
-                analysis_id=str(analysis.id),
-                image_url=image_url,
-                user_id=request.user.id if request.user.is_authenticated else None,
-            )
-            logger.info(f"Analysis task triggered: {analysis.id}")
-        except Exception as e:
-            logger.error(f"Failed to trigger analysis task: {e}")
-            # 실패해도 일단 응답은 반환 (상태는 PENDING으로 유지)
-
-        response_serializer = ImageAnalysisResponseSerializer(analysis)
-        return Response(
-            response_serializer.data,
-            status=status.HTTP_201_CREATED
-        )
 
 class AnalysisRefineStatusView(APIView):
     """
@@ -434,23 +495,36 @@ class ImageAnalysisResultView(APIView):
             ]
         }
         """
-        # DB에서 분석 정보 조회 (관련 데이터 prefetch)
-        try:
-            analysis = ImageAnalysis.objects.select_related(
-                'uploaded_image'
-            ).prefetch_related(
-                'uploaded_image__detected_objects',
-                'uploaded_image__detected_objects__product_mappings',
-                'uploaded_image__detected_objects__product_mappings__product',
-            ).get(id=analysis_id, is_deleted=False)
-        except ImageAnalysis.DoesNotExist:
-            return Response(
-                {'error': '존재하지 않는 분석입니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        with create_span("api_get_analysis_result") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("http.method", "GET")
+                span.set_attribute("api.endpoint", f"/api/v1/analyses/{analysis_id}")
+                span.set_attribute("analysis_id", analysis_id)
 
-        serializer = ImageAnalysisResultSerializer(analysis)
-        return Response(serializer.data)
+            # DB에서 분석 정보 조회 (관련 데이터 prefetch)
+            try:
+                analysis = ImageAnalysis.objects.select_related(
+                    'uploaded_image'
+                ).prefetch_related(
+                    'uploaded_image__detected_objects',
+                    'uploaded_image__detected_objects__product_mappings',
+                    'uploaded_image__detected_objects__product_mappings__product',
+                ).get(id=analysis_id, is_deleted=False)
+            except ImageAnalysis.DoesNotExist:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("error", "analysis_not_found")
+                return Response(
+                    {'error': '존재하지 않는 분석입니다.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("status", analysis.image_analysis_status)
+                detected_count = analysis.uploaded_image.detected_objects.count()
+                span.set_attribute("detected_objects_count", detected_count)
+
+            serializer = ImageAnalysisResultSerializer(analysis)
+            return Response(serializer.data)
 
 
 class UploadedImageHistoryView(APIView):

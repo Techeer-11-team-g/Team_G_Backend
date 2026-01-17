@@ -11,6 +11,13 @@ from celery import shared_task
 from django.conf import settings
 from google.cloud import storage
 
+# OpenTelemetry for custom tracing spans
+try:
+    from opentelemetry import trace
+    tracer = trace.get_tracer("analyses.tasks.upload")
+except ImportError:
+    tracer = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,50 +44,81 @@ def upload_image_to_gcs_task(
         업로드 결과 (uploaded_image_id, url, created_at)
     """
     from analyses.models import UploadedImage
+    from contextlib import nullcontext
+
+    def create_span(name):
+        if tracer:
+            return tracer.start_as_current_span(name)
+        return nullcontext()
 
     try:
-        # 1. Base64 디코딩
-        image_bytes = base64.b64decode(image_b64)
+        with create_span("task_upload_image_to_gcs") as main_span:
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("filename", filename)
+                main_span.set_attribute("content_type", content_type)
 
-        # 2. 고유한 파일명 생성
-        ext = filename.split('.')[-1] if '.' in filename else 'jpg'
-        unique_filename = f"uploads/{datetime.now().strftime('%Y/%m/%d')}/{uuid.uuid4()}.{ext}"
+            # 1. Base64 디코딩
+            with create_span("decode_base64") as span:
+                image_bytes = base64.b64decode(image_b64)
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("image_size_bytes", len(image_bytes))
 
-        # 3. GCS에 직접 업로드
-        client = storage.Client()
-        bucket_name = settings.GCS_BUCKET_NAME
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(unique_filename)
+            # 2. 고유한 파일명 생성
+            ext = filename.split('.')[-1] if '.' in filename else 'jpg'
+            unique_filename = f"uploads/{datetime.now().strftime('%Y/%m/%d')}/{uuid.uuid4()}.{ext}"
 
-        blob.upload_from_string(
-            image_bytes,
-            content_type=content_type,
-        )
+            # 3. GCS에 직접 업로드
+            with create_span("upload_to_gcs") as span:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("service", "google_cloud_storage")
+                    span.set_attribute("bucket", settings.GCS_BUCKET_NAME)
+                    span.set_attribute("blob_path", unique_filename)
 
-        # 4. Public URL 생성
-        gcs_url = f"https://storage.googleapis.com/{bucket_name}/{unique_filename}"
+                client = storage.Client()
+                bucket_name = settings.GCS_BUCKET_NAME
+                bucket = client.bucket(bucket_name)
+                blob = bucket.blob(unique_filename)
 
-        # 5. DB에 레코드 생성
-        from users.models import User
-        user = None
-        if user_id:
-            try:
-                user = User.objects.get(id=user_id)
-            except User.DoesNotExist:
-                pass
+                blob.upload_from_string(
+                    image_bytes,
+                    content_type=content_type,
+                )
 
-        uploaded_image = UploadedImage.objects.create(
-            user=user,
-            uploaded_image_url=unique_filename,  # GCS 경로 저장
-        )
+            # 4. Public URL 생성
+            gcs_url = f"https://storage.googleapis.com/{bucket_name}/{unique_filename}"
 
-        logger.info(f"Image uploaded to GCS: {gcs_url}")
+            # 5. DB에 레코드 생성
+            with create_span("save_to_database") as span:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("service", "mysql")
 
-        return {
-            'uploaded_image_id': uploaded_image.id,
-            'uploaded_image_url': gcs_url,
-            'created_at': uploaded_image.created_at.isoformat(),
-        }
+                from users.models import User
+                user = None
+                if user_id:
+                    try:
+                        user = User.objects.get(id=user_id)
+                    except User.DoesNotExist:
+                        pass
+
+                uploaded_image = UploadedImage.objects.create(
+                    user=user,
+                    uploaded_image_url=unique_filename,
+                )
+
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("uploaded_image_id", uploaded_image.id)
+
+            logger.info(f"Image uploaded to GCS: {gcs_url}")
+
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("uploaded_image_id", uploaded_image.id)
+                main_span.set_attribute("gcs_url", gcs_url)
+
+            return {
+                'uploaded_image_id': uploaded_image.id,
+                'uploaded_image_url': gcs_url,
+                'created_at': uploaded_image.created_at.isoformat(),
+            }
 
     except Exception as e:
         logger.error(f"Failed to upload image to GCS: {e}")

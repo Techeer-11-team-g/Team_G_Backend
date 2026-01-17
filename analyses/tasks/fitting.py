@@ -36,6 +36,7 @@ def process_virtual_fitting(
     redis_service = get_redis_service()
 
     try:
+        # (Redis 임시 저장: 피팅 진행 상태, 1시간 TTL)
         redis_service.set(f"fitting:{fitting_id}:status", "RUNNING", ttl=3600)
 
         fashn_service = get_fashn_service()
@@ -46,6 +47,7 @@ def process_virtual_fitting(
         )
 
         if result.status == 'completed':
+            # (Redis 임시 저장: 완료 상태 및 결과 이미지 URL)
             redis_service.set(f"fitting:{fitting_id}:status", "DONE", ttl=3600)
             redis_service.set(
                 f"fitting:{fitting_id}:result",
@@ -59,5 +61,6 @@ def process_virtual_fitting(
 
     except Exception as e:
         logger.error(f"Fitting {fitting_id} failed: {e}")
+        # (Redis 임시 저장: 실패 상태)
         redis_service.set(f"fitting:{fitting_id}:status", "FAILED", ttl=3600)
         raise self.retry(exc=e)
