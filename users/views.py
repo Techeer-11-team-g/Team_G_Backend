@@ -1,10 +1,13 @@
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiExample 
 
-from .serializers import UserOnboardingSerializer, UserOnboardingResponseSerializer, UserProfileSerializer
+from .serializers import UserOnboardingSerializer, UserOnboardingResponseSerializer, UserProfileSerializer 
+import logging
+
+logger = logging.getLogger(__name__)
 
 class UserOnboardingView(APIView):
     permission_classes = [IsAuthenticated]
@@ -12,7 +15,7 @@ class UserOnboardingView(APIView):
     @extend_schema(
         summary="사용자 필수 정보 등록 (온보딩)",
         description="로그인한 사용자의 이메일, 주소, 결제수단, 전화번호를 등록하거나 수정합니다.",
-        tags=['User']
+        tags=['User'],
         # Request Body 예시 
         request=UserOnboardingSerializer,
         examples=[
@@ -54,25 +57,34 @@ class UserOnboardingView(APIView):
     )
     def patch(self, request):
         # instance=request.user를 넘겨주면 '생성'이 아닌 '수정' 모드로 동작합니다.
-        serializer = UserOnboardingSerializer(
-            instance=request.user, 
-            data=request.data, 
-            partial=True
-        )
-        
-        # 중복 제거 및 들여쓰기 수정 
-        if serializer.is_valid():
-            serializer.save() # serializer의 update() 메서드가 호출됨
-            return Response(
-                UserOnboardingResponseSerializer(request.user).data, 
-                status=status.HTTP_200_OK
-            )
+        try:
+            serializer = UserOnboardingSerializer(
+                instance=request.user, 
+                data=request.data, 
+                partial=True
+            ) 
             
-        # 400 에러 메시지 통일 ("message": "Invalid request data")
-        return Response(
-            {"message": "Invalid request data"}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
+            # 중복 제거 및 들여쓰기 수정 
+            if serializer.is_valid():
+                serializer.save() # serializer의 update() 메서드가 호출됨
+                return Response(
+                    UserOnboardingResponseSerializer(request.user).data, 
+                    status=status.HTTP_200_OK
+                )
+                
+            # 유효성 검사 실패 시 명세서에 따라 "Invalid request data" 반환 
+            return Response(
+                {"message": "Invalid request data"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        except Exception as e:
+            # 500 에러 처리
+            logger.error(f"Onboarding Error: {e}")
+            return Response(
+                {"message": "Internal server error"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class UserMeView(APIView): 
     permission_classes = [IsAuthenticated] 

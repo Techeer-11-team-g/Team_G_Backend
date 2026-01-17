@@ -6,16 +6,12 @@ User = get_user_model()
 
 # 온보딩 시 데이터를 입력받는 용도
 class UserOnboardingSerializer(serializers.ModelSerializer):
-    # 프론트에서 user_email로 보낸다니 source를 이용해 매핑 가능(명세서의 user_email을 모델의 email 필드와 매핑)
+    # 명세서의 user_email을 모델의 email 필드와 매핑 
     user_email = serializers.EmailField(source='email', required=True)
-    
-    user_id = serializers.IntegerField(source='id', read_only=True)
-    user_name = serializers.CharField(source='username', read_only=True)
-    updated_at = serializers.DateTimeField(read_only=True) 
-
+     
     class Meta:
         model = User
-        # 모델에 payment 필드가 추가되었으므로 fields에 포함시키면 자동으로 처리됩니다.
+        # 실제 입력받을 필드만 명시 
         fields = ['user_email', 'address', 'phone_number', 'payment']
 
 # 온보딩 성공 후 결과를 명세서 양식대로 보여주는 용도
@@ -23,6 +19,8 @@ class UserOnboardingResponseSerializer(serializers.ModelSerializer):
     user_id = serializers.IntegerField(source='id')
     user_name = serializers.CharField(source='username')
     user_email = serializers.EmailField(source='email')
+    # updated_at 포맷은 settings의 DATETIME_FORMAT 설정을 따르거나 별도 지정 가능 
+    updated_at = serializers.DateTimeField()
 
     class Meta:
         model = User
