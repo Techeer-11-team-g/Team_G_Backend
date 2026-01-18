@@ -1,12 +1,112 @@
 from rest_framework import serializers
 from .models import FittingImage, UserImage
 from products.models import Product
+from PIL import Image, ImageOps
+from io import BytesIO
+from django.core.files.uploadedfile import InMemoryUploadedFile
+import logging
+
+logger = logging.getLogger(__name__)
+
+# 이미지 최적화 설정
+IMAGE_MAX_WIDTH = 768
+IMAGE_MAX_HEIGHT = 1024
+JPEG_QUALITY = 85
+
+
+def optimize_image_for_fitting(image_file):
+    """
+    가상 피팅 API 최적화를 위한 이미지 리사이즈 및 압축
+    
+    - 최대 해상도: 768x1024 (API 권장 최소 해상도)
+    - JPEG 압축: Quality 85
+    - 비율 유지하며 리사이즈
+    
+    Returns:
+        InMemoryUploadedFile: 최적화된 이미지 파일
+    """
+    try:
+        img = Image.open(image_file)
+        original_size = image_file.size
+        original_dimensions = img.size
+        
+        # EXIF 회전 정보 적용 (사진 방향 보정)
+        img = ImageOps.exif_transpose(img)
+        
+        # 이미 작은 이미지는 리사이즈 불필요
+        if img.width <= IMAGE_MAX_WIDTH and img.height <= IMAGE_MAX_HEIGHT:
+            # 작은 이미지도 JPEG 압축은 적용
+            if img.mode in ('RGBA', 'P', 'LA'):
+                img = img.convert('RGB')
+            
+            buffer = BytesIO()
+            img.save(buffer, format='JPEG', quality=JPEG_QUALITY, optimize=True)
+            buffer.seek(0)
+            
+            optimized_file = InMemoryUploadedFile(
+                file=buffer,
+                field_name='file',
+                name=_get_jpeg_filename(image_file.name),
+                content_type='image/jpeg',
+                size=buffer.getbuffer().nbytes,
+                charset=None
+            )
+            logger.info(
+                f"Image optimized (compression only): {original_dimensions} -> {img.size}, "
+                f"{original_size} bytes -> {buffer.getbuffer().nbytes} bytes"
+            )
+            return optimized_file
+        
+        # 비율 유지하며 리사이즈
+        img.thumbnail((IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT), Image.LANCZOS)
+        
+        # RGBA/P 모드를 RGB로 변환 (JPEG 저장을 위해)
+        if img.mode in ('RGBA', 'P', 'LA'):
+            img = img.convert('RGB')
+        
+        # JPEG로 압축
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG', quality=JPEG_QUALITY, optimize=True)
+        buffer.seek(0)
+        
+        # InMemoryUploadedFile로 변환
+        optimized_file = InMemoryUploadedFile(
+            file=buffer,
+            field_name='file',
+            name=_get_jpeg_filename(image_file.name),
+            content_type='image/jpeg',
+            size=buffer.getbuffer().nbytes,
+            charset=None
+        )
+        
+        logger.info(
+            f"Image optimized: {original_dimensions} -> {img.size}, "
+            f"{original_size} bytes -> {buffer.getbuffer().nbytes} bytes"
+        )
+        return optimized_file
+        
+    except Exception as e:
+        logger.warning(f"Image optimization failed, using original: {e}")
+        # 최적화 실패 시 원본 반환
+        image_file.seek(0)
+        return image_file
+
+
+def _get_jpeg_filename(original_name):
+    """파일명을 .jpg 확장자로 변환"""
+    if '.' in original_name:
+        name_without_ext = original_name.rsplit('.', 1)[0]
+    else:
+        name_without_ext = original_name
+    return f"{name_without_ext}.jpg"
 
 
 class UserImageUploadSerializer(serializers.ModelSerializer):
     """
     사용자 이미지 업로드용 Serializer
     POST /api/v1/user-images - 사용자 전신 이미지 업로드
+    
+    이미지는 자동으로 768x1024로 리사이즈되고 JPEG 압축됩니다.
     """
     # Response 필드
     user_image_id = serializers.IntegerField(source='id', read_only=True)
@@ -30,7 +130,7 @@ class UserImageUploadSerializer(serializers.ModelSerializer):
 
     def validate_file(self, value):
         """파일 유효성 검사"""
-        # 파일 크기 제한: 10MB
+        # 파일 크기 제한: 10MB (최적화 전 원본 기준)
         if value.size > 10 * 1024 * 1024:
             raise serializers.ValidationError('파일 크기는 10MB 이하여야 합니다.')
 
@@ -42,14 +142,17 @@ class UserImageUploadSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        """사용자 이미지 저장"""
+        """사용자 이미지 저장 (최적화 적용)"""
         file = validated_data.pop('file')
         request = self.context.get('request')
         user = request.user  # JWT 인증된 유저
 
+        # 이미지 최적화 (768x1024 리사이즈 + JPEG 압축)
+        optimized_file = optimize_image_for_fitting(file)
+
         user_image = UserImage.objects.create(
             user=user,
-            user_image_url=file  # ImageField에 파일 저장
+            user_image_url=optimized_file 
         )
         return user_image
 
