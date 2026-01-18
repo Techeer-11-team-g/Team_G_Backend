@@ -9,7 +9,6 @@ analyses 앱 공통 유틸리티 모듈.
 """
 
 from contextlib import nullcontext
-from functools import lru_cache
 from typing import Optional
 
 from .constants import (
@@ -118,10 +117,11 @@ def format_bbox_for_api(obj) -> dict:
 # 트레이싱 유틸리티
 # =============================================================================
 
-@lru_cache(maxsize=16)
 def get_tracer(module_name: str):
     """
-    OpenTelemetry tracer를 가져옴 (캐싱 적용).
+    OpenTelemetry tracer를 가져옴.
+
+    Note: lru_cache 제거 - TracerProvider 초기화 전에 캐시되면 noop tracer 반환됨
 
     Args:
         module_name: 모듈 식별자 (예: 'analyses.views')
@@ -145,12 +145,9 @@ def create_span(tracer_name: str, span_name: str):
         span_name: span 이름
 
     Returns:
-        span 컨텍스트 매니저 (OTel 미설치 시 nullcontext)
+        TracingContext (안전한 .set() 메서드 제공)
     """
-    tracer = get_tracer(tracer_name)
-    if tracer:
-        return tracer.start_as_current_span(span_name)
-    return nullcontext()
+    return TracingContext(tracer_name, span_name)
 
 
 class TracingContext:
@@ -166,15 +163,17 @@ class TracingContext:
         self.tracer = get_tracer(tracer_name)
         self.span_name = span_name
         self.span = None
+        self._context_manager = None
 
     def __enter__(self):
         if self.tracer:
-            self.span = self.tracer.start_as_current_span(self.span_name).__enter__()
+            self._context_manager = self.tracer.start_as_current_span(self.span_name)
+            self.span = self._context_manager.__enter__()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.span:
-            self.span.__exit__(exc_type, exc_val, exc_tb)
+        if self._context_manager:
+            return self._context_manager.__exit__(exc_type, exc_val, exc_tb)
         return False
 
     def set(self, key: str, value) -> None:
