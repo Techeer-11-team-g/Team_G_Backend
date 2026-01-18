@@ -179,7 +179,17 @@ class UploadedImageView(APIView):
                         headers=headers,
                     )
 
-                    logger.info(f"Parallel upload+analysis started: image={uploaded_image_id}, analysis={analysis.id}")
+                    logger.info(
+                        "이미지 업로드 및 분석 시작 (병렬 모드)",
+                        extra={
+                            'event': 'image_upload_with_analysis',
+                            'user_id': user_id,
+                            'uploaded_image_id': uploaded_image_id,
+                            'analysis_id': str(analysis.id),
+                            'file_name': file.name,
+                            'file_size': file.size,
+                        }
+                    )
                     IMAGES_UPLOADED_TOTAL.inc()
 
                     ctx.set("uploaded_image_id", uploaded_image_id)
@@ -207,7 +217,16 @@ class UploadedImageView(APIView):
                         headers=headers,
                     ).get(timeout=60)
 
-                    logger.info(f"Image uploaded via Celery: {result.get('uploaded_image_id')}")
+                    logger.info(
+                        "이미지 업로드 완료",
+                        extra={
+                            'event': 'image_uploaded',
+                            'user_id': user_id,
+                            'uploaded_image_id': result.get('uploaded_image_id'),
+                            'file_name': file.name,
+                            'file_size': file.size,
+                        }
+                    )
                     IMAGES_UPLOADED_TOTAL.inc()
 
                     ctx.set("uploaded_image_id", result.get('uploaded_image_id'))
@@ -350,7 +369,16 @@ class ImageAnalysisView(APIView):
             if subtasks:
                 job = group(subtasks)
                 results = job.apply_async().get(timeout=300)
-                logger.info(f"Refine completed: {len(results)} objects processed")
+                logger.info(
+                    "자연어 재분석 완료",
+                    extra={
+                        'event': 'refine_completed',
+                        'analysis_id': str(analysis_id),
+                        'refine_id': refine_id,
+                        'query': query,
+                        'objects_processed': len(results),
+                    }
+                )
 
         except Exception as e:
             logger.error(f"Failed to process refine tasks: {e}")
@@ -465,7 +493,15 @@ class ImageAnalysisView(APIView):
                     kwargs={'user_id': request.user.id if request.user.is_authenticated else None},
                     headers=headers,
                 )
-                logger.info(f"Analysis task triggered: {analysis.id}")
+                logger.info(
+                    "이미지 분석 시작",
+                    extra={
+                        'event': 'analysis_started',
+                        'user_id': request.user.id if request.user.is_authenticated else None,
+                        'analysis_id': str(analysis.id),
+                        'uploaded_image_id': analysis.uploaded_image.id,
+                    }
+                )
                 ctx.set("task_triggered", True)
             except Exception as e:
                 logger.error(f"Failed to trigger analysis task: {e}")

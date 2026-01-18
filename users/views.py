@@ -133,7 +133,14 @@ class UserRegisterView(APIView):
 
             # 메트릭 수집 및 로깅
             USERS_REGISTERED_TOTAL.inc()
-            logger.info(f"신규 사용자 등록: id={user.id}")
+            logger.info(
+                "회원가입 완료",
+                extra={
+                    'event': 'user_registered',
+                    'user_id': user.id,
+                    'username': user.username,
+                }
+            )
 
             _set_span_attr(span, "user.id", user.id)
             _set_span_attr(span, "status", "success")
@@ -211,7 +218,14 @@ class UserOnboardingView(APIView):
                 _set_span_attr(db_span, "user.id", request.user.id)
                 _set_span_attr(db_span, "service", "mysql")
 
-            logger.info(f"온보딩 완료: user_id={request.user.id}")
+            logger.info(
+                "사용자 온보딩 정보 수정",
+                extra={
+                    'event': 'user_onboarding_updated',
+                    'user_id': request.user.id,
+                    'updated_fields': list(request.data.keys()),
+                }
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -275,5 +289,12 @@ class UserMeView(APIView):
                 serializer.save()
                 _set_span_attr(db_span, "service", "mysql")
 
-            logger.info(f"프로필 수정: user_id={request.user.id}")
+            logger.info(
+                "사용자 프로필 수정",
+                extra={
+                    'event': 'user_profile_updated',
+                    'user_id': request.user.id,
+                    'updated_fields': list(request.data.keys()),
+                }
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)

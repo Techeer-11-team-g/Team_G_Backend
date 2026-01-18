@@ -177,7 +177,15 @@ class VisionService:
 
             # 겹치는 bbox 제거 (IoU > 0.7이면 confidence 높은 것만 유지)
             filtered_list = self._remove_overlapping_items(result_list)
-            logger.info(f"Detected {len(filtered_list)} unique fashion items")
+            logger.info(
+                "Google Vision 객체 탐지 완료",
+                extra={
+                    'event': 'vision_api_detect',
+                    'service': 'google_vision',
+                    'detected_count': len(filtered_list),
+                    'categories': [item.category for item in filtered_list],
+                }
+            )
 
             # Record detected objects metrics
             for item in filtered_list:
