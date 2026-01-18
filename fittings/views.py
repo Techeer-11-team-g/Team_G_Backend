@@ -1,27 +1,52 @@
+"""
+fittings/views.py - 가상 피팅 API Views
+
+이 모듈은 가상 피팅 관련 REST API 엔드포인트를 정의합니다.
+
+API Endpoints:
+    - POST /api/v1/user-images          : 사용자 전신 이미지 업로드
+    - POST /api/v1/fitting-images       : 가상 피팅 요청
+    - GET  /api/v1/fitting-images/{id}/status : 피팅 상태 조회
+    - GET  /api/v1/fitting-images/{id}  : 피팅 결과 조회
+
+Note:
+    모든 API는 JWT 인증이 필요합니다.
+"""
+
 import logging
 from contextlib import nullcontext
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import IsAuthenticated
-from drf_spectacular.utils import extend_schema
 from django.shortcuts import get_object_or_404
-from .models import FittingImage, UserImage
+from drf_spectacular.utils import extend_schema
+from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import FittingImage
 from .serializers import (
     FittingImageSerializer,
-    FittingStatusSerializer,
     FittingResultSerializer,
-    UserImageUploadSerializer
+    FittingStatusSerializer,
+    UserImageUploadSerializer,
 )
 from .tasks import process_fitting_task
 
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# OpenTelemetry 트레이싱 유틸리티
+# =============================================================================
+
 def _get_tracer():
-    """Get tracer lazily to ensure TracerProvider is initialized."""
+    """
+    OpenTelemetry Tracer를 지연 로딩합니다.
+    
+    Returns:
+        Tracer | None: TracerProvider가 초기화된 경우 Tracer, 아니면 None
+    """
     try:
         from opentelemetry import trace
         return trace.get_tracer("fittings.views")
@@ -30,19 +55,51 @@ def _get_tracer():
 
 
 def _create_span(name: str):
-    """Create a span if tracer is available."""
+    """
+    트레이싱 span을 생성합니다.
+    
+    Args:
+        name: span 이름
+        
+    Returns:
+        Span | nullcontext: Tracer가 있으면 Span, 없으면 nullcontext
+    """
     tracer = _get_tracer()
     if tracer:
         return tracer.start_as_current_span(name)
     return nullcontext()
 
 
+def _set_span_attr(span, key: str, value):
+    """
+    span에 attribute를 안전하게 설정합니다.
+    
+    Args:
+        span: OpenTelemetry Span 객체
+        key: attribute 키
+        value: attribute 값
+    """
+    if span and hasattr(span, 'set_attribute'):
+        span.set_attribute(key, value)
+
+
+# =============================================================================
+# API Views
+# =============================================================================
+
 class UserImageUploadView(APIView):
     """
-    [POST] 사용자 전신 이미지 업로드
-    POST /api/v1/user-images
-
-    파일을 업로드하면 URL로 변환하여 저장 후 반환
+    사용자 전신 이미지 업로드 API
+    
+    Endpoint: POST /api/v1/user-images
+    
+    기능:
+        - 사용자 전신 이미지 업로드
+        - 자동 이미지 최적화 (768x1024 리사이즈 + JPEG 압축)
+        - GCS에 저장 후 URL 반환
+    
+    Authentication:
+        JWT 인증 필요
     """
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [IsAuthenticated]
@@ -67,9 +124,9 @@ class UserImageUploadView(APIView):
         responses={201: UserImageUploadSerializer}
     )
     def post(self, request):
+        """사용자 전신 이미지를 업로드합니다."""
         with _create_span("api_user_image_upload") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("user.id", request.user.id)
+            _set_span_attr(span, "user.id", request.user.id)
 
             serializer = UserImageUploadSerializer(
                 data=request.data,
@@ -78,9 +135,8 @@ class UserImageUploadView(APIView):
 
             if serializer.is_valid():
                 user_image = serializer.save()
-                logger.info(f"User image uploaded: {user_image.id}")
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("user_image.id", user_image.id)
+                logger.info(f"사용자 이미지 업로드 완료: id={user_image.id}")
+                _set_span_attr(span, "user_image.id", user_image.id)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -88,18 +144,29 @@ class UserImageUploadView(APIView):
 
 class FittingRequestView(APIView):
     """
-    [POST] 가상 피팅 요청
-    POST /api/v1/fitting-images
-
-    동일한 (user_image, product) 조합에 대해 완료된 피팅이 있으면
-    API 호출 없이 기존 결과를 재사용합니다.
+    가상 피팅 요청 API
+    
+    Endpoint: POST /api/v1/fitting-images
+    
+    기능:
+        - 사용자 이미지 + 상품 조합으로 가상 피팅 요청
+        - 동일 조합의 완료된 피팅이 있으면 캐싱된 결과 반환 (200 OK)
+        - 신규 요청은 Celery 비동기 태스크로 처리 (201 Created)
+        
+    캐싱 전략:
+        동일한 (user_image, product) 조합에 대해 완료된 피팅이 있으면
+        API 호출 없이 기존 결과를 재사용합니다.
+    
+    Authentication:
+        JWT 인증 필요
     """
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
         tags=["Fittings"],
         summary="가상 피팅 요청",
-        description="사용자 이미지와 상품 정보를 바탕으로 가상 피팅을 요청합니다. 동일한 조합의 결과가 이미 있으면 기존 결과를 반환합니다.",
+        description="사용자 이미지와 상품 정보를 바탕으로 가상 피팅을 요청합니다. "
+                    "동일한 조합의 결과가 이미 있으면 기존 결과를 반환합니다.",
         request=FittingImageSerializer,
         responses={
             201: FittingImageSerializer,
@@ -107,58 +174,70 @@ class FittingRequestView(APIView):
         }
     )
     def post(self, request):
+        """가상 피팅을 요청합니다."""
         with _create_span("api_fitting_request") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("user.id", request.user.id)
+            _set_span_attr(span, "user.id", request.user.id)
 
             serializer = FittingImageSerializer(
                 data=request.data,
                 context={'request': request}
             )
 
-            if serializer.is_valid():
-                user_image = serializer.validated_data.get('user_image_url')
-                product = serializer.validated_data.get('product')
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-                # 캐싱: 동일한 조합의 완료된 피팅이 있는지 확인
-                existing_fitting = FittingImage.objects.filter(
-                    user_image=user_image,
-                    product=product,
-                    fitting_image_status=FittingImage.Status.DONE,
-                    is_deleted=False
-                ).first()
+            user_image = serializer.validated_data.get('user_image_url')
+            product = serializer.validated_data.get('product')
 
-                if existing_fitting:
-                    logger.info(f"Fitting cache hit: {existing_fitting.id}")
-                    if span and hasattr(span, 'set_attribute'):
-                        span.set_attribute("fitting.cache_hit", True)
-                        span.set_attribute("fitting.id", existing_fitting.id)
-                    result_serializer = FittingResultSerializer(existing_fitting)
-                    return Response(result_serializer.data, status=status.HTTP_200_OK)
+            # Step 1: 캐싱 확인 - 동일한 조합의 완료된 피팅이 있는지 확인
+            existing_fitting = FittingImage.objects.filter(
+                user_image=user_image,
+                product=product,
+                fitting_image_status=FittingImage.Status.DONE,
+                is_deleted=False
+            ).first()
 
-                # 신규 피팅 생성
-                fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
+            if existing_fitting:
+                # 캐시 히트: 기존 결과 반환
+                logger.info(f"피팅 캐시 히트: id={existing_fitting.id}")
+                _set_span_attr(span, "fitting.cache_hit", True)
+                _set_span_attr(span, "fitting.id", existing_fitting.id)
+                result_serializer = FittingResultSerializer(existing_fitting)
+                return Response(result_serializer.data, status=status.HTTP_200_OK)
 
-                # Inject trace context for Celery
-                from opentelemetry.propagate import inject
-                headers = {}
-                inject(headers)
-                process_fitting_task.apply_async(args=[fitting.id], headers=headers)
+            # Step 2: 신규 피팅 생성
+            fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
 
-                logger.info(f"Fitting request created: {fitting.id}")
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("fitting.cache_hit", False)
-                    span.set_attribute("fitting.id", fitting.id)
+            # Step 3: Celery 비동기 태스크 실행
+            from opentelemetry.propagate import inject
+            headers = {}
+            inject(headers)  # 트레이스 컨텍스트 전파
+            process_fitting_task.apply_async(args=[fitting.id], headers=headers)
 
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            logger.info(f"피팅 요청 생성: id={fitting.id}")
+            _set_span_attr(span, "fitting.cache_hit", False)
+            _set_span_attr(span, "fitting.id", fitting.id)
 
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class FittingStatusView(APIView):
     """
-    [GET] 가상 피팅 상태 조회
-    GET /api/v1/fitting-images/{fitting_image_id}/status
+    가상 피팅 상태 조회 API
+    
+    Endpoint: GET /api/v1/fitting-images/{fitting_image_id}/status
+    
+    기능:
+        - 피팅 작업의 현재 상태 조회
+        - 클라이언트 폴링에 사용
+    
+    Response:
+        - fitting_image_status: PENDING/RUNNING/DONE/FAILED
+        - progress: 진행률 (0-100)
+        - updated_at: 최종 업데이트 일시
+    
+    Authentication:
+        JWT 인증 필요
     """
     permission_classes = [IsAuthenticated]
 
@@ -169,14 +248,12 @@ class FittingStatusView(APIView):
         responses={200: FittingStatusSerializer}
     )
     def get(self, request, fitting_image_id):
+        """피팅 작업의 현재 상태를 조회합니다."""
         with _create_span("api_fitting_status") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("fitting.id", fitting_image_id)
+            _set_span_attr(span, "fitting.id", fitting_image_id)
 
             fitting = get_object_or_404(FittingImage, id=fitting_image_id)
-
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("fitting.status", fitting.fitting_image_status)
+            _set_span_attr(span, "fitting.status", fitting.fitting_image_status)
 
             serializer = FittingStatusSerializer(fitting)
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -184,8 +261,22 @@ class FittingStatusView(APIView):
 
 class FittingResultView(APIView):
     """
-    [GET] 가상 피팅 결과 조회
-    GET /api/v1/fitting-images/{fitting_image_id}
+    가상 피팅 결과 조회 API
+    
+    Endpoint: GET /api/v1/fitting-images/{fitting_image_id}
+    
+    기능:
+        - 완료된 피팅의 결과 이미지 URL 조회
+        - 피팅 상태와 관계없이 조회 가능 (PENDING/RUNNING 상태도 조회 가능)
+    
+    Response:
+        - fitting_image_id: 피팅 요청 ID
+        - fitting_image_status: 피팅 상태
+        - fitting_image_url: 결과 이미지 URL (완료 시에만 값 존재)
+        - completed_at: 완료 일시
+    
+    Authentication:
+        JWT 인증 필요
     """
     permission_classes = [IsAuthenticated]
 
@@ -196,16 +287,15 @@ class FittingResultView(APIView):
         responses={200: FittingResultSerializer}
     )
     def get(self, request, fitting_image_id):
+        """피팅 결과를 조회합니다."""
         with _create_span("api_fitting_result") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("fitting.id", fitting_image_id)
+            _set_span_attr(span, "fitting.id", fitting_image_id)
 
             fitting = get_object_or_404(FittingImage, id=fitting_image_id)
-
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("fitting.status", fitting.fitting_image_status)
-                if fitting.fitting_image_url:
-                    span.set_attribute("fitting.has_result", True)
+            _set_span_attr(span, "fitting.status", fitting.fitting_image_status)
+            
+            if fitting.fitting_image_url:
+                _set_span_attr(span, "fitting.has_result", True)
 
             serializer = FittingResultSerializer(fitting)
             return Response(serializer.data, status=status.HTTP_200_OK)
