@@ -7,9 +7,10 @@ class AnalysesConfig(AppConfig):
     verbose_name = 'Image Analyses'
 
     def ready(self):
-        """Initialize OpenTelemetry tracing when Django starts."""
-        try:
-            from config.tracing import init_tracing
-            init_tracing(service_name="team-g-backend")
-        except ImportError:
-            pass  # Tracing packages not installed
+        """App initialization hook.
+
+        Note: Tracing is initialized separately:
+        - Django web server: config/wsgi.py
+        - Celery worker: config/celery.py (via celeryd_init signal)
+        """
+        pass

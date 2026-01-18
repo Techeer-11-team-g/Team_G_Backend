@@ -63,7 +63,7 @@ class UploadedImageView(APIView):
     @extend_schema(
         tags=["Analyses"],
         summary="이미지 업로드",
-        description="분석할 이미지를 업로드합니다 (최대 10MB).",
+        description="분석할 이미지를 업로드합니다 (최대 10MB). auto_analyze=true 시 업로드와 분석을 동시에 시작합니다.",
         request={
             'multipart/form-data': {
                 'type': 'object',
@@ -72,6 +72,10 @@ class UploadedImageView(APIView):
                         'type': 'string',
                         'format': 'binary',
                         'description': '분석할 이미지 파일 (JPG, PNG, WEBP)'
+                    },
+                    'auto_analyze': {
+                        'type': 'boolean',
+                        'description': 'true 시 업로드와 동시에 분석 시작 (GCS 다운로드 생략으로 더 빠름)'
                     }
                 },
                 'required': ['file']
@@ -82,9 +86,12 @@ class UploadedImageView(APIView):
     def post(self, request):
         """
         이미지 업로드 (Celery 비동기 처리)
+        auto_analyze=true 시 GCS 업로드와 분석을 병렬로 시작
         """
         import base64
+        from concurrent.futures import ThreadPoolExecutor
         from .constants import ImageConfig
+        from .models import ImageAnalysis
 
         with create_span(TRACER_NAME, "api_upload_image") as ctx:
             ctx.set("http.method", "POST")
@@ -112,9 +119,13 @@ class UploadedImageView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # auto_analyze 옵션 확인
+            auto_analyze = request.data.get('auto_analyze', '').lower() in ('true', '1', 'yes')
+
             ctx.set("file.name", file.name)
             ctx.set("file.size", file.size)
             ctx.set("file.content_type", file.content_type)
+            ctx.set("auto_analyze", auto_analyze)
 
             # 2. 파일을 Base64로 인코딩 (Celery 전달용)
             file_bytes = file.read()
@@ -123,24 +134,86 @@ class UploadedImageView(APIView):
             # 3. 사용자 ID 가져오기
             user_id = request.user.id if request.user.is_authenticated else None
 
-            # 4. Celery 태스크로 GCS 업로드
+            # 4. Celery 태스크 실행
             try:
                 from opentelemetry.propagate import inject
                 headers = {}
                 inject(headers)
 
-                result = upload_image_to_gcs_task.apply_async(
-                    args=[image_b64, file.name, file.content_type, user_id],
-                    headers=headers,
-                ).get(timeout=60)
+                if auto_analyze:
+                    # 진짜 병렬 처리: GCS 업로드와 분석을 동시에 시작
+                    from users.models import User
 
-                logger.info(f"Image uploaded via Celery: {result.get('uploaded_image_id')}")
-                IMAGES_UPLOADED_TOTAL.inc()
+                    # 1. UploadedImage 레코드 먼저 생성 (placeholder URL)
+                    user = None
+                    if user_id:
+                        try:
+                            user = User.objects.get(id=user_id)
+                        except User.DoesNotExist:
+                            pass
 
-                ctx.set("uploaded_image_id", result.get('uploaded_image_id'))
-                ctx.set("status", "success")
+                    uploaded_image = UploadedImage.objects.create(
+                        user=user,
+                        uploaded_image_url='pending',  # GCS 업로드 완료 시 업데이트됨
+                    )
+                    uploaded_image_id = uploaded_image.id
 
-                return Response(result, status=status.HTTP_201_CREATED)
+                    # 2. ImageAnalysis 레코드 생성
+                    analysis = ImageAnalysis.objects.create(
+                        uploaded_image=uploaded_image,
+                        image_analysis_status=ImageAnalysis.Status.PENDING,
+                    )
+
+                    # 3. GCS 업로드 태스크 비동기 시작 (기존 레코드 업데이트 모드)
+                    upload_image_to_gcs_task.apply_async(
+                        args=[image_b64, file.name, file.content_type, user_id],
+                        kwargs={'uploaded_image_id': uploaded_image_id},
+                        headers=headers,
+                    )
+
+                    # 4. 분석 태스크 비동기 시작 (image_b64 직접 전달로 GCS 다운로드 생략)
+                    #    분석은 image_b64를 사용하므로 GCS URL이 없어도 됨
+                    process_image_analysis.apply_async(
+                        args=[str(analysis.id), None],  # URL은 None (image_b64 사용)
+                        kwargs={'user_id': user_id, 'image_b64': image_b64},
+                        headers=headers,
+                    )
+
+                    logger.info(f"Parallel upload+analysis started: image={uploaded_image_id}, analysis={analysis.id}")
+                    IMAGES_UPLOADED_TOTAL.inc()
+
+                    ctx.set("uploaded_image_id", uploaded_image_id)
+                    ctx.set("analysis_id", analysis.id)
+                    ctx.set("parallel_mode", True)
+                    ctx.set("status", "success")
+
+                    return Response({
+                        'uploaded_image_id': uploaded_image_id,
+                        'uploaded_image_url': 'pending',  # GCS 업로드 진행 중
+                        'created_at': uploaded_image.created_at.isoformat(),
+                        'auto_analyze': True,
+                        'analysis_id': analysis.id,
+                        'analysis_status': 'PENDING',
+                        'polling': {
+                            'status_url': f'/api/v1/analyses/{analysis.id}/status',
+                            'result_url': f'/api/v1/analyses/{analysis.id}',
+                        }
+                    }, status=status.HTTP_201_CREATED)
+
+                else:
+                    # 기존 로직: GCS 업로드만
+                    result = upload_image_to_gcs_task.apply_async(
+                        args=[image_b64, file.name, file.content_type, user_id],
+                        headers=headers,
+                    ).get(timeout=60)
+
+                    logger.info(f"Image uploaded via Celery: {result.get('uploaded_image_id')}")
+                    IMAGES_UPLOADED_TOTAL.inc()
+
+                    ctx.set("uploaded_image_id", result.get('uploaded_image_id'))
+                    ctx.set("status", "success")
+
+                    return Response(result, status=status.HTTP_201_CREATED)
 
             except Exception as e:
                 logger.error(f"Failed to upload image: {e}")
