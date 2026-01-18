@@ -53,6 +53,21 @@ def init_worker_tracing_threads(**kwargs):
         pass  # Tracing packages not installed
 
 
+@celeryd_init.connect
+def warmup_models(**kwargs):
+    """Pre-load ML models at worker startup to avoid cold start latency."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        logger.info("Warming up FashionCLIP model...")
+        from services.embedding_service import get_embedding_service
+        get_embedding_service()  # Singleton - loads model on first call
+        logger.info("FashionCLIP model warm-up complete")
+    except Exception as e:
+        logger.warning(f"Model warm-up failed (will load on first request): {e}")
+
+
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
     """Debug task for testing Celery."""
