@@ -69,15 +69,13 @@ def init_tracing(service_name: str = "team-g-backend"):
             agent_port=jaeger_port,
         )
 
-        # Set up TracerProvider with BatchSpanProcessor
-        # Use small batch size to avoid UDP "Message too long" errors
+        # Set up TracerProvider with BatchSpanProcessor for efficient export
         provider = TracerProvider(resource=resource)
-        span_processor = BatchSpanProcessor(
-            jaeger_exporter,
-            max_export_batch_size=10,  # Small batches for UDP size limit
-            schedule_delay_millis=1000,  # Export every 1 second
-        )
-        provider.add_span_processor(span_processor)
+
+        # Add Jaeger exporter with batch processor
+        jaeger_processor = BatchSpanProcessor(jaeger_exporter)
+        provider.add_span_processor(jaeger_processor)
+
         trace.set_tracer_provider(provider)
 
         # Auto-instrumentation for Django
