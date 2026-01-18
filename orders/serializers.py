@@ -161,6 +161,7 @@ class OrderCancelSerializer(serializers.ModelSerializer):
         # 주문에 포함된 항목 중 하나라도 취소 불가능한 상태(배송 중, 배송 완료, 이미 취소됨 등)가 있으면 에러 발생
         if self.instance.order_items.exclude(order_status__in=cancellable_statuses).exists():
             raise serializers.ValidationError("이미 배송 중이거나 취소 불가능한 상태입니다.") 
+        return attrs 
     def update(self, instance, validated_data):
         try:
             return services.cancel_order(instance, self.context['request'].user)

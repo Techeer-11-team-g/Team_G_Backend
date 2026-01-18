@@ -173,4 +173,4 @@ class OrderItem(BaseSoftDeleteModel):
     @property
     def subtotal(self):
         """해당 주문 항목의 소계"""
-        return self.price_at_order * self.purchased_quantity 
+        return self.price_at_order * self.purchased_quantity  

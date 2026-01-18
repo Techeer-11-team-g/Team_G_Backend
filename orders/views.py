@@ -1,9 +1,8 @@
 import logging
 from contextlib import nullcontext
 
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status, permissions, mixins
 from rest_framework.response import Response
-from rest_framework import mixins
 from rest_framework.pagination import CursorPagination
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse
@@ -18,6 +17,14 @@ from . import services
 from services.metrics import ORDERS_CREATED_TOTAL, CART_ITEMS_TOTAL
 
 logger = logging.getLogger(__name__)
+
+def _get_tracer():
+    from opentelemetry import trace
+    return trace.get_tracer(__name__)
+
+def _create_span(span_name, attributes=None):
+    from analyses.utils import create_span 
+    return create_span("orders.views", span_name)
 
 class OrderCursorPagination(CursorPagination):
     ordering = '-created_at'
@@ -70,9 +77,55 @@ class OrderCursorPagination(CursorPagination):
         responses={200: OpenApiResponse(description="취소 성공 응답")}
     )
 )
+
+class OrderViewSet(...):
+    # 2. PUT 메서드 제한 
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def list(self, request, *args, **kwargs):
+        # 3. 각 메서드에 트레이싱 적용 [cite: 47]
+        with _create_span("list_orders") as span:
+            span.set("user.id", request.user.id)
+            return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        with _create_span("create_order") as span:
+            # 서비스 레이어 활용 및 트레이싱 연동 로직
+            return super().create(request, *args, **kwargs)
+
+@extend_schema_view(
+    list=extend_schema(tags=["Orders"], summary="주문 내역 조회"),
+    create=extend_schema(tags=["Orders"], summary="주문 생성"),
+    retrieve=extend_schema(tags=["Orders"], summary="주문 상세 조회"),
+    partial_update=extend_schema(tags=["Orders"], summary="주문 취소")
+)
 class OrderViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = OrderCursorPagination
+
+    # 1. HTTP 메서드 제한 (PUT 차단) [cite: 48]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    # 2. 각 메서드에 트레이싱 복구 [cite: 16, 47]
+    def list(self, request, *args, **kwargs):
+        with _create_span("list_orders") as span:
+            span.set("user.id", request.user.id)
+            return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        with _create_span("create_order") as span:
+            span.set("user.id", request.user.id)
+            return super().create(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        with _create_span("retrieve_order") as span:
+            span.set("user.id", request.user.id)
+            return super().retrieve(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        with _create_span("cancel_order") as span:
+            span.set("user.id", request.user.id)
+            return super().partial_update(request, *args, **kwargs)
 
     def get_queryset(self):
         queryset = Order.objects.filter(user=self.request.user)
@@ -116,46 +169,32 @@ class CartItemListCreateView(APIView):
             }
         }
     )
+
     def get(self, request):
-        """장바구니 조회"""
-        user = request.user
-        cart_items = CartItem.objects.filter(user=user).select_related(
-            'selected_product__product', 
-            'selected_product__size_code'
-        )
-        
-        serializer = CartItemSerializer(cart_items, many=True)
-        total_quantity = sum(item.quantity for item in cart_items)
-        total_price = sum(
-            item.quantity * item.selected_product.product.selling_price
-            for item in cart_items
-        )
+        with _create_span("get_cart") as span:
+            span.set("user.id", request.user.id)
+            user = request.user
+            cart_items = CartItem.objects.filter(user=user).select_related(
+                'selected_product__product', 'selected_product__size_code'
+            )
+            serializer = CartItemSerializer(cart_items, many=True)
+            return Response({
+                'items': serializer.data,
+                'total_quantity': sum(item.quantity for item in cart_items),
+                'total_price': sum(item.quantity * item.selected_product.product.selling_price for item in cart_items)
+            })
 
-        return Response({
-            'items': serializer.data,
-            'total_quantity': total_quantity,
-            'total_price': total_price
-        })
-
-    @extend_schema(
-        tags=["Orders"],
-        summary="장바구니 추가",
-        description="특정 상품(사이즈 포함)을 장바구니에 추가합니다. 이미 있으면 수량이 증가합니다.",
-        request=CartItemCreateSerializer,
-        responses={201: CartItemCreateSerializer}
-    )
     def post(self, request):
-        """장바구니 추가"""
-        serializer = CartItemCreateSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        cart_item = serializer.save()
+        with _create_span("add_to_cart") as span:
+            span.set("user.id", request.user.id)
+            serializer = CartItemCreateSerializer(data=request.data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            cart_item = serializer.save()
 
-        CART_ITEMS_TOTAL.labels(action='added').inc()
-        logger.info(f"Cart item added: {cart_item.id} by user {request.user.id}")
-
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
+            CART_ITEMS_TOTAL.labels(action='added').inc()
+            logger.info(f"Cart item added: {cart_item.id}")
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+ 
 class CartItemDeleteView(APIView):
     """
     장바구니 상품 삭제 API 
@@ -169,19 +208,12 @@ class CartItemDeleteView(APIView):
         responses={204: None}
     )
     def delete(self, request, cart_item_id):
-        """장바구니 상품 삭제 (Soft Delete)"""
-        user = request.user
-        try:
-            cart_item = CartItem.objects.get(id=cart_item_id, user=user)
-        except CartItem.DoesNotExist:
-            return Response(
-                {'detail': '해당 장바구니 항목을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        cart_item.delete()  # BaseSoftDeleteModel's delete()
-
-        CART_ITEMS_TOTAL.labels(action='removed').inc()
-        logger.info(f"Cart item removed: {cart_item_id} by user {request.user.id}")
-
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        with _create_span("delete_cart_item") as span:
+            span.set("user.id", request.user.id)
+            try:
+                cart_item = CartItem.objects.get(id=cart_item_id, user=request.user)
+                cart_item.delete() # BaseSoftDeleteModel 작동 [cite: 33]
+                CART_ITEMS_TOTAL.labels(action='removed').inc()
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            except CartItem.DoesNotExist:
+                return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND) 
