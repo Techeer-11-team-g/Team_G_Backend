@@ -58,6 +58,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'config.middleware.RequestLoggingMiddleware',  # API 요청/응답 로깅
     'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
@@ -310,16 +311,52 @@ if LOKI_ENABLED:
 else:
     _active_handlers = ['console', 'file']
 
+# Custom JSON Formatter to include extra fields
+import logging
+import json as json_module
+
+
+class JsonFormatter(logging.Formatter):
+    """JSON Formatter that includes extra fields from log records."""
+
+    RESERVED_ATTRS = {
+        'name', 'msg', 'args', 'created', 'filename', 'funcName', 'levelname',
+        'levelno', 'lineno', 'module', 'msecs', 'pathname', 'process',
+        'processName', 'relativeCreated', 'stack_info', 'exc_info', 'exc_text',
+        'thread', 'threadName', 'taskName', 'message',
+    }
+
+    def format(self, record):
+        log_obj = {
+            'timestamp': self.formatTime(record, self.datefmt),
+            'level': record.levelname,
+            'logger': record.name,
+            'module': record.module,
+            'message': record.getMessage(),
+        }
+
+        # Add extra fields
+        for key, value in record.__dict__.items():
+            if key not in self.RESERVED_ATTRS and not key.startswith('_'):
+                try:
+                    json_module.dumps(value)  # Check if serializable
+                    log_obj[key] = value
+                except (TypeError, ValueError):
+                    log_obj[key] = str(value)
+
+        return json_module.dumps(log_obj, ensure_ascii=False)
+
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
-            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'format': '{levelname} {asctime} {name} {module} {process:d} {thread:d} {message}',
             'style': '{',
         },
         'json': {
-            'format': '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}',
+            '()': JsonFormatter,
         },
     },
     'handlers': _log_handlers,
@@ -334,6 +371,36 @@ LOGGING = {
             'propagate': False,
         },
         'celery': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'analyses': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'services': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'fittings': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'orders': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'users': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'config': {
             'handlers': _active_handlers,
             'level': 'INFO',
             'propagate': False,

@@ -135,7 +135,14 @@ class UserImageUploadView(APIView):
 
             if serializer.is_valid():
                 user_image = serializer.save()
-                logger.info(f"사용자 이미지 업로드 완료: id={user_image.id}")
+                logger.info(
+                    "사용자 전신 이미지 업로드 완료",
+                    extra={
+                        'event': 'user_image_uploaded',
+                        'user_id': request.user.id,
+                        'user_image_id': user_image.id,
+                    }
+                )
                 _set_span_attr(span, "user_image.id", user_image.id)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -199,7 +206,15 @@ class FittingRequestView(APIView):
 
             if existing_fitting:
                 # 캐시 히트: 기존 결과 반환
-                logger.info(f"피팅 캐시 히트: id={existing_fitting.id}")
+                logger.info(
+                    "가상 피팅 캐시 히트",
+                    extra={
+                        'event': 'fitting_cache_hit',
+                        'user_id': request.user.id,
+                        'fitting_id': existing_fitting.id,
+                        'product_id': product.id,
+                    }
+                )
                 _set_span_attr(span, "fitting.cache_hit", True)
                 _set_span_attr(span, "fitting.id", existing_fitting.id)
                 result_serializer = FittingResultSerializer(existing_fitting)
@@ -214,7 +229,16 @@ class FittingRequestView(APIView):
             inject(headers)  # 트레이스 컨텍스트 전파
             process_fitting_task.apply_async(args=[fitting.id], headers=headers)
 
-            logger.info(f"피팅 요청 생성: id={fitting.id}")
+            logger.info(
+                "가상 피팅 요청 생성",
+                extra={
+                    'event': 'fitting_requested',
+                    'user_id': request.user.id,
+                    'fitting_id': fitting.id,
+                    'product_id': product.id,
+                    'user_image_id': user_image.id,
+                }
+            )
             _set_span_attr(span, "fitting.cache_hit", False)
             _set_span_attr(span, "fitting.id", fitting.id)
 

@@ -137,7 +137,17 @@ Important:
 
             # Extract JSON from response
             attributes = self._parse_response(content)
-            logger.info(f"Extracted attributes: color={attributes.color}, brand={attributes.brand}")
+            logger.info(
+                "Claude 속성 추출 완료",
+                extra={
+                    'event': 'claude_extract_attributes',
+                    'service': 'claude_vision',
+                    'category': category,
+                    'color': attributes.color,
+                    'brand': attributes.brand,
+                    'item_type': attributes.item_type,
+                }
+            )
 
             return attributes
 
@@ -280,7 +290,16 @@ Most similar first. Only include the numbers, no explanation."""
                 if i not in seen:
                     reranked.append(item)
 
-            logger.info(f"Claude reranked {len(candidates[:10])} candidates")
+            logger.info(
+                "Claude 리랭킹 완료",
+                extra={
+                    'event': 'claude_rerank',
+                    'service': 'claude_vision',
+                    'candidates_count': len(candidates[:10]),
+                    'reranked_count': len(reranked),
+                    'top_k': top_k,
+                }
+            )
             return reranked[:top_k]
 
         except Exception as e:

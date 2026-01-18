@@ -77,28 +77,6 @@ class OrderCursorPagination(CursorPagination):
         responses={200: OpenApiResponse(description="취소 성공 응답")}
     )
 )
-
-class OrderViewSet(...):
-    # 2. PUT 메서드 제한 
-    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
-
-    def list(self, request, *args, **kwargs):
-        # 3. 각 메서드에 트레이싱 적용 [cite: 47]
-        with _create_span("list_orders") as span:
-            span.set("user.id", request.user.id)
-            return super().list(request, *args, **kwargs)
-
-    def create(self, request, *args, **kwargs):
-        with _create_span("create_order") as span:
-            # 서비스 레이어 활용 및 트레이싱 연동 로직
-            return super().create(request, *args, **kwargs)
-
-@extend_schema_view(
-    list=extend_schema(tags=["Orders"], summary="주문 내역 조회"),
-    create=extend_schema(tags=["Orders"], summary="주문 생성"),
-    retrieve=extend_schema(tags=["Orders"], summary="주문 상세 조회"),
-    partial_update=extend_schema(tags=["Orders"], summary="주문 취소")
-)
 class OrderViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
     pagination_class = OrderCursorPagination
@@ -145,8 +123,23 @@ class OrderViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.Retrie
             return OrderDetailSerializer
         elif self.action == 'partial_update':
             return OrderCancelSerializer
-        return OrderSerializer 
- 
+        return OrderSerializer
+
+    def perform_create(self, serializer):
+        """주문 생성 시 로깅 추가"""
+        order = serializer.save()
+        ORDERS_CREATED_TOTAL.inc()
+        logger.info(
+            "주문 생성 완료",
+            extra={
+                'event': 'order_created',
+                'user_id': self.request.user.id,
+                'order_id': order.id,
+                'total_amount': order.total_amount,
+                'item_count': order.order_items.count(),
+            }
+        )
+        return order
 
 class CartItemListCreateView(APIView):
     """
@@ -192,7 +185,16 @@ class CartItemListCreateView(APIView):
             cart_item = serializer.save()
 
             CART_ITEMS_TOTAL.labels(action='added').inc()
-            logger.info(f"Cart item added: {cart_item.id}")
+            logger.info(
+                "장바구니 상품 추가",
+                extra={
+                    'event': 'cart_item_added',
+                    'user_id': request.user.id,
+                    'cart_item_id': cart_item.id,
+                    'product_id': cart_item.selected_product.product_id,
+                    'quantity': cart_item.quantity,
+                }
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
  
 class CartItemDeleteView(APIView):
@@ -212,8 +214,16 @@ class CartItemDeleteView(APIView):
             span.set("user.id", request.user.id)
             try:
                 cart_item = CartItem.objects.get(id=cart_item_id, user=request.user)
-                cart_item.delete() # BaseSoftDeleteModel 작동 [cite: 33]
+                cart_item.delete()  # BaseSoftDeleteModel 작동
                 CART_ITEMS_TOTAL.labels(action='removed').inc()
+                logger.info(
+                    "장바구니 상품 삭제",
+                    extra={
+                        'event': 'cart_item_removed',
+                        'user_id': request.user.id,
+                        'cart_item_id': cart_item_id,
+                    }
+                )
                 return Response(status=status.HTTP_204_NO_CONTENT)
             except CartItem.DoesNotExist:
-                return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND) 
+                return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
