@@ -4,6 +4,7 @@ Supports virtual try-on for clothes, bags, and shoes.
 """
 
 import logging
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Optional, Union
 
@@ -12,6 +13,20 @@ from django.conf import settings
 from django.db.models.fields.files import FieldFile
 
 logger = logging.getLogger(__name__)
+
+# OpenTelemetry tracer (optional)
+try:
+    from opentelemetry import trace
+    tracer = trace.get_tracer("services.fashn_service")
+except ImportError:
+    tracer = None
+
+
+def _create_span(name: str):
+    """Create a span if tracer is available, otherwise return nullcontext."""
+    if tracer:
+        return tracer.start_as_current_span(name)
+    return nullcontext()
 
 
 @dataclass
@@ -112,46 +127,60 @@ class FashnService:
         garment_description: str = '',
     ) -> FittingResult:
         """Create a virtual fitting request (synchronous)."""
-        endpoint_name, config = self._get_endpoint_config(category)
-        url = f"{self.BASE_URL}/{endpoint_name}?api_key={self.api_key}"
+        with _create_span("thenewblack_api_call") as span:
+            endpoint_name, config = self._get_endpoint_config(category)
+            url = f"{self.BASE_URL}/{endpoint_name}?api_key={self.api_key}"
 
-        form_data = {
-            config['model_param']: (None, model_image_url),
-            config['item_param']: (None, product_image_url),
-        }
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("thenewblack.endpoint", endpoint_name)
+                span.set_attribute("thenewblack.category", category)
 
-        for key, value in config.get('extra', {}).items():
-            form_data[key] = (None, value)
+            form_data = {
+                config['model_param']: (None, model_image_url),
+                config['item_param']: (None, product_image_url),
+            }
 
-        if config.get('has_description'):
-            form_data['description'] = (None, garment_description or 'fashion item')
+            for key, value in config.get('extra', {}).items():
+                form_data[key] = (None, value)
 
-        try:
-            logger.info(f"The New Black request: endpoint={endpoint_name}")
+            if config.get('has_description'):
+                form_data['description'] = (None, garment_description or 'fashion item')
 
-            response = requests.post(url, files=form_data, timeout=self.timeout)
-            response.raise_for_status()
+            try:
+                logger.info(f"The New Black request: endpoint={endpoint_name}")
 
-            output_url = response.text.strip()
-            if output_url.startswith('http'):
-                logger.info(f"The New Black completed: {output_url[:80]}...")
-                return FittingResult(id='tnb-sync', status='completed', output_url=output_url)
+                response = requests.post(url, files=form_data, timeout=self.timeout)
+                response.raise_for_status()
 
-            logger.warning(f"The New Black unexpected response: {output_url[:200]}")
-            return FittingResult(id='', status='error', error=f'Unexpected response: {output_url[:200]}')
+                output_url = response.text.strip()
+                if output_url.startswith('http'):
+                    logger.info(f"The New Black completed: {output_url[:80]}...")
+                    if span and hasattr(span, 'set_attribute'):
+                        span.set_attribute("thenewblack.status", "completed")
+                    return FittingResult(id='tnb-sync', status='completed', output_url=output_url)
 
-        except requests.exceptions.Timeout:
-            logger.error("The New Black request timed out")
-            return FittingResult(id='', status='error', error='Request timed out')
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to create fitting: {e}")
-            error_detail = str(e)
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                except:
-                    error_detail = e.response.text
-            return FittingResult(id='', status='error', error=str(error_detail))
+                logger.warning(f"The New Black unexpected response: {output_url[:200]}")
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("thenewblack.status", "unexpected_response")
+                return FittingResult(id='', status='error', error=f'Unexpected response: {output_url[:200]}')
+
+            except requests.exceptions.Timeout:
+                logger.error("The New Black request timed out")
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("thenewblack.status", "timeout")
+                return FittingResult(id='', status='error', error='Request timed out')
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to create fitting: {e}")
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("thenewblack.status", "error")
+                    span.set_attribute("thenewblack.error", str(e)[:200])
+                error_detail = str(e)
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_detail = e.response.json()
+                    except:
+                        error_detail = e.response.text
+                return FittingResult(id='', status='error', error=str(error_detail))
 
     def map_category(self, detected_category: str) -> str:
         """Map detected category to The New Black category."""

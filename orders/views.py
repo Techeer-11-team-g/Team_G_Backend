@@ -1,3 +1,6 @@
+import logging
+from contextlib import nullcontext
+
 from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from rest_framework import mixins
@@ -6,6 +9,28 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse
 from django.contrib.auth import get_user_model
 from .models import Order, CartItem
+
+from services.metrics import ORDERS_CREATED_TOTAL, CART_ITEMS_TOTAL
+
+logger = logging.getLogger(__name__)
+
+
+def _get_tracer():
+    """Get tracer lazily to ensure TracerProvider is initialized."""
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer("orders.views")
+    except ImportError:
+        return None
+
+
+def _create_span(name: str):
+    """Create a span if tracer is available."""
+    tracer = _get_tracer()
+    if tracer:
+        return tracer.start_as_current_span(name)
+    return nullcontext()
+
 
 User = get_user_model()
 from .serializers import (
@@ -81,24 +106,72 @@ class OrderViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.Retrie
     def get_serializer_class(self):
         if self.action == 'create':
             return OrderCreateSerializer
-        elif self.action == 'list': # list 액션 추가 
+        elif self.action == 'list': # list 액션 추가
             return OrderListSerializer
         elif self.action == 'retrieve':
-            return OrderDetailSerializer 
+            return OrderDetailSerializer
         elif self.action == 'partial_update':
             return OrderCancelSerializer
         return OrderSerializer
+
+    def list(self, request, *args, **kwargs):
+        """주문 목록 조회 API with tracing"""
+        with _create_span("api_order_list") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("user.id", request.user.id)
+
+            # Step 1: Fetch orders from database
+            with _create_span("1_fetch_orders_db") as db_span:
+                queryset = self.filter_queryset(self.get_queryset())
+                if db_span and hasattr(db_span, 'set_attribute'):
+                    db_span.set_attribute("service", "mysql")
+
+            # Step 2: Paginate results
+            with _create_span("2_paginate_orders") as page_span:
+                page = self.paginate_queryset(queryset)
+                if page is not None:
+                    serializer = self.get_serializer(page, many=True)
+                    if page_span and hasattr(page_span, 'set_attribute'):
+                        page_span.set_attribute("page_size", len(page))
+                    return self.get_paginated_response(serializer.data)
+
+            # Step 3: Serialize all results (no pagination)
+            with _create_span("3_serialize_orders") as ser_span:
+                serializer = self.get_serializer(queryset, many=True)
+                if ser_span and hasattr(ser_span, 'set_attribute'):
+                    ser_span.set_attribute("order_count", len(serializer.data))
+
+            return Response(serializer.data)
 
     def create(self, request, *args, **kwargs):
         """
         주문 생성 API
         """
-        serializer = self.get_serializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        order = serializer.save()
-        
-        # Response(201 Created) body construction handled by serializer.to_representation
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        with _create_span("api_order_create") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("user.id", request.user.id)
+
+            # Step 1: Validate request
+            with _create_span("1_validate_order_request") as v_span:
+                serializer = self.get_serializer(data=request.data, context={'request': request})
+                serializer.is_valid(raise_exception=True)
+                if v_span and hasattr(v_span, 'set_attribute'):
+                    v_span.set_attribute("validation", "passed")
+
+            # Step 2: Create order in database
+            with _create_span("2_create_order_db") as db_span:
+                order = serializer.save()
+                if db_span and hasattr(db_span, 'set_attribute'):
+                    db_span.set_attribute("order.id", order.id)
+                    db_span.set_attribute("service", "mysql")
+
+            ORDERS_CREATED_TOTAL.inc()
+            logger.info(f"Order created: {order.id} by user {request.user.id}")
+
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("order.id", order.id)
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class CartItemListCreateView(APIView):
@@ -126,26 +199,43 @@ class CartItemListCreateView(APIView):
     )
     def get(self, request):
         """장바구니 조회"""
-        user = request.user
-        cart_items = CartItem.objects.filter(
-            user=user,
-            is_deleted=False
-        ).select_related('selected_product__product', 'selected_product__size_code')
+        with _create_span("api_cart_list") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("user.id", request.user.id)
 
-        serializer = CartItemSerializer(cart_items, many=True)
+            # Step 1: Fetch cart items from database
+            with _create_span("1_fetch_cart_items_db") as db_span:
+                user = request.user
+                cart_items = CartItem.objects.filter(
+                    user=user,
+                    is_deleted=False
+                ).select_related('selected_product__product', 'selected_product__size_code')
+                cart_items = list(cart_items)
+                if db_span and hasattr(db_span, 'set_attribute'):
+                    db_span.set_attribute("service", "mysql")
+                    db_span.set_attribute("item_count", len(cart_items))
 
-        # 총 수량, 총 가격 계산
-        total_quantity = sum(item.quantity for item in cart_items)
-        total_price = sum(
-            item.quantity * item.selected_product.product.selling_price
-            for item in cart_items
-        )
+            # Step 2: Calculate totals and serialize
+            with _create_span("2_calculate_totals") as calc_span:
+                serializer = CartItemSerializer(cart_items, many=True)
+                total_quantity = sum(item.quantity for item in cart_items)
+                total_price = sum(
+                    item.quantity * item.selected_product.product.selling_price
+                    for item in cart_items
+                )
+                if calc_span and hasattr(calc_span, 'set_attribute'):
+                    calc_span.set_attribute("total_quantity", total_quantity)
+                    calc_span.set_attribute("total_price", total_price)
 
-        return Response({
-            'items': serializer.data,
-            'total_quantity': total_quantity,
-            'total_price': total_price
-        })
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("cart.item_count", len(cart_items))
+                span.set_attribute("cart.total_quantity", total_quantity)
+
+            return Response({
+                'items': serializer.data,
+                'total_quantity': total_quantity,
+                'total_price': total_price
+            })
 
     @extend_schema(
         tags=["Orders"],
@@ -156,10 +246,21 @@ class CartItemListCreateView(APIView):
     )
     def post(self, request):
         """장바구니 추가"""
-        serializer = CartItemCreateSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        cart_item = serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        with _create_span("api_cart_add") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("user.id", request.user.id)
+
+            serializer = CartItemCreateSerializer(data=request.data, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            cart_item = serializer.save()
+
+            CART_ITEMS_TOTAL.labels(action='added').inc()
+            logger.info(f"Cart item added: {cart_item.id} by user {request.user.id}")
+
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("cart_item.id", cart_item.id)
+
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class CartItemDeleteView(APIView):
@@ -177,19 +278,28 @@ class CartItemDeleteView(APIView):
     )
     def delete(self, request, cart_item_id):
         """장바구니 상품 삭제 (Soft Delete)"""
-        user = request.user
-        try:
-            cart_item = CartItem.objects.get(
-                id=cart_item_id,
-                user=user,
-                is_deleted=False
-            )
-        except CartItem.DoesNotExist:
-            return Response(
-                {'detail': '해당 장바구니 항목을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        with _create_span("api_cart_delete") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("user.id", request.user.id)
+                span.set_attribute("cart_item.id", cart_item_id)
 
-        cart_item.is_deleted = True
-        cart_item.save()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+            user = request.user
+            try:
+                cart_item = CartItem.objects.get(
+                    id=cart_item_id,
+                    user=user,
+                    is_deleted=False
+                )
+            except CartItem.DoesNotExist:
+                return Response(
+                    {'detail': '해당 장바구니 항목을 찾을 수 없습니다.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            cart_item.is_deleted = True
+            cart_item.save()
+
+            CART_ITEMS_TOTAL.labels(action='removed').inc()
+            logger.info(f"Cart item removed: {cart_item_id} by user {request.user.id}")
+
+            return Response(status=status.HTTP_204_NO_CONTENT)

@@ -60,7 +60,7 @@ def init_tracing(service_name: str = "team-g-backend"):
             "service.version": "1.0.0",
         })
 
-        # Configure Jaeger exporter
+        # Configure Jaeger exporter - use UDP agent with small batch size
         jaeger_host = os.getenv('JAEGER_HOST', 'localhost')
         jaeger_port = int(os.getenv('JAEGER_PORT', '6831'))
 
@@ -70,8 +70,14 @@ def init_tracing(service_name: str = "team-g-backend"):
         )
 
         # Set up TracerProvider with BatchSpanProcessor
+        # Use small batch size to avoid UDP "Message too long" errors
         provider = TracerProvider(resource=resource)
-        provider.add_span_processor(BatchSpanProcessor(jaeger_exporter))
+        span_processor = BatchSpanProcessor(
+            jaeger_exporter,
+            max_export_batch_size=10,  # Small batches for UDP size limit
+            schedule_delay_millis=1000,  # Export every 1 second
+        )
+        provider.add_span_processor(span_processor)
         trace.set_tracer_provider(provider)
 
         # Auto-instrumentation for Django
@@ -93,7 +99,7 @@ def init_tracing(service_name: str = "team-g-backend"):
         LoggingInstrumentor().instrument(set_logging_format=True)
 
         _tracing_initialized = True
-        logger.info(f"OpenTelemetry tracing initialized: Jaeger at {jaeger_host}:{jaeger_port}")
+        logger.info(f"OpenTelemetry tracing initialized: Jaeger UDP agent at {jaeger_host}:{jaeger_port}")
 
     except ImportError as e:
         logger.warning(f"OpenTelemetry packages not installed, tracing disabled: {e}")
