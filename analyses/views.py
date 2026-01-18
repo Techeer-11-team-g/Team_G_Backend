@@ -202,8 +202,11 @@ class UploadedImageView(APIView):
         cursor = request.query_params.get('cursor')
         limit = int(request.query_params.get('limit', 10))
 
-        # 삭제되지 않은 이미지만 조회
-        queryset = UploadedImage.objects.filter(is_deleted=False)
+        # 본인이 업로드한 이미지만 조회
+        queryset = UploadedImage.objects.filter(
+            user=request.user,
+            is_deleted=False
+        )
 
         # cursor가 있으면 그 이후부터 조회
         if cursor:
@@ -696,10 +699,11 @@ class UploadedImageHistoryView(APIView):
             }]
         }
         """
-        # 1. 업로드된 이미지 조회
+        # 1. 업로드된 이미지 조회 (본인 소유만)
         try:
             uploaded_image = UploadedImage.objects.get(
                 id=uploaded_image_id,
+                user=request.user,
                 is_deleted=False
             )
         except UploadedImage.DoesNotExist:
