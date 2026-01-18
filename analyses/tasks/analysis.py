@@ -71,8 +71,9 @@ TRACER_NAME = "analyses.tasks.analysis"
 def process_image_analysis(
     self,
     analysis_id: str,
-    image_url: str,
+    image_url: Optional[str] = None,
     user_id: Optional[int] = None,
+    image_b64: Optional[str] = None,
 ):
     """
     이미지 분석 메인 태스크.
@@ -84,13 +85,19 @@ def process_image_analysis(
         analysis_id: Analysis job ID
         image_url: GCS URL of the uploaded image
         user_id: Optional user ID
+        image_b64: Optional Base64 encoded image (GCS 다운로드 생략용)
 
     Returns:
         Analysis result dict
     """
     with create_span(TRACER_NAME, "process_image_analysis") as ctx:
         ctx.set("analysis.id", analysis_id)
-        ctx.set("image.url", image_url[:100] if image_url else "")
+        ctx.set("image.url", image_url[:100] if image_url else "none")
+        ctx.set("image.direct_bytes", image_b64 is not None)
+
+        # image_url 또는 image_b64 중 하나는 필수
+        if not image_url and not image_b64:
+            raise ValueError("Either image_url or image_b64 must be provided")
 
         redis_service = get_redis_service()
         ANALYSIS_IN_PROGRESS.inc()
@@ -100,13 +107,21 @@ def process_image_analysis(
             redis_service.update_analysis_running(analysis_id, progress=0)
             logger.info(f"Starting analysis {analysis_id}")
 
-            # Step 1: Download image from GCS
-            with create_span(TRACER_NAME, "1_download_image_gcs") as span:
-                span.set("service", "google_cloud_storage")
-                redis_service.set_analysis_progress(analysis_id, 10)
-                with ANALYSIS_DURATION.labels(stage='download_image').time():
-                    image_bytes = _download_image(image_url)
-                span.set("image.size_bytes", len(image_bytes))
+            # Step 1: Get image bytes (직접 전달받았으면 다운로드 생략)
+            if image_b64:
+                with create_span(TRACER_NAME, "1_decode_image_bytes") as span:
+                    span.set("source", "direct_bytes")
+                    redis_service.set_analysis_progress(analysis_id, 10)
+                    image_bytes = base64.b64decode(image_b64)
+                    span.set("image.size_bytes", len(image_bytes))
+                    logger.info(f"Using direct image bytes ({len(image_bytes)} bytes)")
+            else:
+                with create_span(TRACER_NAME, "1_download_image_gcs") as span:
+                    span.set("service", "google_cloud_storage")
+                    redis_service.set_analysis_progress(analysis_id, 10)
+                    with ANALYSIS_DURATION.labels(stage='download_image').time():
+                        image_bytes = _download_image(image_url)
+                    span.set("image.size_bytes", len(image_bytes))
 
             # Step 2: Detect objects with Vision API
             with create_span(TRACER_NAME, "2_detect_objects_vision_api") as span:

@@ -31,6 +31,7 @@ def upload_image_to_gcs_task(
     filename: str,
     content_type: str,
     user_id: int = None,
+    uploaded_image_id: int = None,
 ):
     """
     이미지를 GCS에 업로드하는 Celery 태스크.
@@ -42,6 +43,7 @@ def upload_image_to_gcs_task(
         filename: 원본 파일명
         content_type: MIME 타입 (image/jpeg, image/png 등)
         user_id: 업로드한 사용자 ID (optional)
+        uploaded_image_id: 기존 UploadedImage ID (병렬 처리용, optional)
 
     Returns:
         업로드 결과 (uploaded_image_id, url, created_at)
@@ -60,6 +62,7 @@ def upload_image_to_gcs_task(
             if main_span and hasattr(main_span, 'set_attribute'):
                 main_span.set_attribute("filename", filename)
                 main_span.set_attribute("content_type", content_type)
+                main_span.set_attribute("parallel_mode", uploaded_image_id is not None)
 
             # 1. Base64 디코딩
             with create_span("decode_base64") as span:
@@ -91,23 +94,35 @@ def upload_image_to_gcs_task(
             # 4. Public URL 생성
             gcs_url = f"https://storage.googleapis.com/{bucket_name}/{unique_filename}"
 
-            # 5. DB에 레코드 생성
+            # 5. DB 처리: 기존 레코드 업데이트 또는 새 레코드 생성
             with create_span("save_to_database") as span:
                 if span and hasattr(span, 'set_attribute'):
                     span.set_attribute("service", "mysql")
 
-                from users.models import User
-                user = None
-                if user_id:
-                    try:
-                        user = User.objects.get(id=user_id)
-                    except User.DoesNotExist:
-                        pass
+                if uploaded_image_id:
+                    # 병렬 처리 모드: 기존 레코드 URL 업데이트
+                    UploadedImage.objects.filter(id=uploaded_image_id).update(
+                        uploaded_image_url=unique_filename
+                    )
+                    uploaded_image = UploadedImage.objects.get(id=uploaded_image_id)
+                    if span and hasattr(span, 'set_attribute'):
+                        span.set_attribute("mode", "update_existing")
+                else:
+                    # 기존 로직: 새 레코드 생성
+                    from users.models import User
+                    user = None
+                    if user_id:
+                        try:
+                            user = User.objects.get(id=user_id)
+                        except User.DoesNotExist:
+                            pass
 
-                uploaded_image = UploadedImage.objects.create(
-                    user=user,
-                    uploaded_image_url=unique_filename,
-                )
+                    uploaded_image = UploadedImage.objects.create(
+                        user=user,
+                        uploaded_image_url=unique_filename,
+                    )
+                    if span and hasattr(span, 'set_attribute'):
+                        span.set_attribute("mode", "create_new")
 
                 if span and hasattr(span, 'set_attribute'):
                     span.set_attribute("uploaded_image_id", uploaded_image.id)
