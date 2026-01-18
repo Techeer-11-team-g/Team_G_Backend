@@ -1,6 +1,12 @@
 """
 Image Analysis Tasks - 이미지 분석 파이프라인.
 
+리팩토링:
+- 상수 모듈 활용 (constants.py)
+- 공통 유틸리티 활용 (utils.py)
+- 장문 함수 분리 (_process_detected_item → 6개 헬퍼)
+- Product 생성 로직 통합
+
 Pipeline:
 1. Receive image analysis request
 2. Google Vision API for object detection (bbox)
@@ -12,17 +18,11 @@ Pipeline:
 8. Claude Haiku reranking (병렬 처리)
 9. Save results to MySQL
 10. Update status in Redis
-
-비동기 처리:
-- RabbitMQ: 메시지 브로커로 태스크 큐잉
-- Celery Group: 여러 객체를 병렬로 처리
-- Redis: 진행 상태 및 결과 캐싱
 """
 
 import io
 import base64
 import logging
-import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -44,71 +44,28 @@ from services.metrics import (
     push_metrics,
 )
 
-# OpenTelemetry for custom tracing spans
-def _get_tracer():
-    """Get tracer lazily to ensure TracerProvider is initialized."""
-    try:
-        from opentelemetry import trace
-        return trace.get_tracer("analyses.tasks.analysis")
-    except ImportError:
-        return None
+from analyses.constants import (
+    CATEGORY_MAPPING,
+    SearchConfig,
+    ImageConfig,
+)
+from analyses.utils import (
+    normalize_category,
+    normalize_bbox,
+    create_span,
+    get_or_create_product_from_search,
+)
 
 
 logger = logging.getLogger(__name__)
 
-
-def _upload_to_gcs(image_bytes: bytes, analysis_id: str, item_index: int, category: str) -> Optional[str]:
-    """
-    Upload cropped image to GCS.
-
-    Args:
-        image_bytes: Cropped image bytes
-        analysis_id: Analysis job ID
-        item_index: Item index
-        category: Item category
-
-    Returns:
-        GCS public URL or None if upload fails
-    """
-    try:
-        bucket_name = settings.GCS_BUCKET_NAME
-        credentials_file = settings.GCS_CREDENTIALS_FILE
-
-        if not bucket_name or not credentials_file:
-            logger.warning("GCS not configured, skipping upload")
-            return None
-
-        # Create storage client
-        client = storage.Client.from_service_account_json(credentials_file)
-        bucket = client.bucket(bucket_name)
-
-        # Generate unique filename
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"cropped/{analysis_id}/{timestamp}_{item_index}_{category}.jpg"
-
-        # Upload
-        blob = bucket.blob(filename)
-        blob.upload_from_string(image_bytes, content_type='image/jpeg')
-
-        # Return public URL
-        gcs_url = f"https://storage.googleapis.com/{bucket_name}/{filename}"
-        logger.info(f"Uploaded cropped image to GCS: {gcs_url}")
-
-        return gcs_url
-
-    except Exception as e:
-        logger.error(f"Failed to upload to GCS: {e}")
-        return None
+# 트레이서 모듈명
+TRACER_NAME = "analyses.tasks.analysis"
 
 
-def _create_span(name: str):
-    """Create a span if tracer is available."""
-    tracer = _get_tracer()
-    if tracer:
-        return tracer.start_as_current_span(name)
-    from contextlib import nullcontext
-    return nullcontext()
-
+# =============================================================================
+# Main Celery Tasks
+# =============================================================================
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def process_image_analysis(
@@ -131,10 +88,9 @@ def process_image_analysis(
     Returns:
         Analysis result dict
     """
-    with _create_span("process_image_analysis") as main_span:
-        if main_span and hasattr(main_span, 'set_attribute'):
-            main_span.set_attribute("analysis.id", analysis_id)
-            main_span.set_attribute("image.url", image_url[:100] if image_url else "")
+    with create_span(TRACER_NAME, "process_image_analysis") as ctx:
+        ctx.set("analysis.id", analysis_id)
+        ctx.set("image.url", image_url[:100] if image_url else "")
 
         redis_service = get_redis_service()
         ANALYSIS_IN_PROGRESS.inc()
@@ -145,42 +101,38 @@ def process_image_analysis(
             logger.info(f"Starting analysis {analysis_id}")
 
             # Step 1: Download image from GCS
-            with _create_span("1_download_image_gcs") as span:
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("service", "google_cloud_storage")
+            with create_span(TRACER_NAME, "1_download_image_gcs") as span:
+                span.set("service", "google_cloud_storage")
                 redis_service.set_analysis_progress(analysis_id, 10)
                 with ANALYSIS_DURATION.labels(stage='download_image').time():
                     image_bytes = _download_image(image_url)
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("image.size_bytes", len(image_bytes))
+                span.set("image.size_bytes", len(image_bytes))
 
             # Step 2: Detect objects with Vision API
-            with _create_span("2_detect_objects_vision_api") as span:
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("service", "google_vision_api")
+            with create_span(TRACER_NAME, "2_detect_objects_vision_api") as span:
+                span.set("service", "google_vision_api")
                 redis_service.set_analysis_progress(analysis_id, 20)
                 with ANALYSIS_DURATION.labels(stage='detect_objects').time():
                     vision_service = get_vision_service()
                     detected_items = vision_service.detect_objects_from_bytes(image_bytes)
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("detected.count", len(detected_items))
-                    if detected_items:
-                        span.set_attribute("detected.categories", ",".join(set(i.category for i in detected_items)))
+                span.set("detected.count", len(detected_items))
+                if detected_items:
+                    span.set("detected.categories", ",".join(set(i.category for i in detected_items)))
+
             logger.info(f"Detected {len(detected_items)} items")
 
             if not detected_items:
                 redis_service.update_analysis_done(analysis_id, {'items': []})
                 _update_analysis_status_db(analysis_id, 'DONE')
-                if main_span and hasattr(main_span, 'set_attribute'):
-                    main_span.set_attribute("result", "no_items_detected")
+                ctx.set("result", "no_items_detected")
                 return {'analysis_id': analysis_id, 'items': []}
 
             # Step 3: Encode image for parallel processing
-            with _create_span("3_encode_image_base64") as span:
+            with create_span(TRACER_NAME, "3_encode_image_base64"):
                 image_b64 = base64.b64encode(image_bytes).decode('utf-8')
 
             # Step 4: Create subtasks for parallel processing
-            with _create_span("4_dispatch_parallel_tasks") as span:
+            with create_span(TRACER_NAME, "4_dispatch_parallel_tasks") as span:
                 subtasks = []
                 for idx, item in enumerate(detected_items):
                     subtasks.append(
@@ -207,15 +159,12 @@ def process_image_analysis(
                     total_items=len(detected_items),
                 )
 
-                job = chord(subtasks)(callback)
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("tasks.count", len(subtasks))
+                chord(subtasks)(callback)
+                span.set("tasks.count", len(subtasks))
 
             logger.info(f"Analysis {analysis_id}: dispatched {len(subtasks)} parallel tasks")
-
-            if main_span and hasattr(main_span, 'set_attribute'):
-                main_span.set_attribute("status", "PROCESSING")
-                main_span.set_attribute("parallel_tasks", len(subtasks))
+            ctx.set("status", "PROCESSING")
+            ctx.set("parallel_tasks", len(subtasks))
 
             return {'analysis_id': analysis_id, 'status': 'PROCESSING', 'task_count': len(subtasks)}
 
@@ -223,8 +172,7 @@ def process_image_analysis(
             logger.error(f"Analysis {analysis_id} failed: {e}")
             redis_service.update_analysis_failed(analysis_id, str(e))
             _update_analysis_status_db(analysis_id, 'FAILED')
-            if main_span and hasattr(main_span, 'set_attribute'):
-                main_span.set_attribute("error", str(e))
+            ctx.set("error", str(e))
             raise self.retry(exc=e)
 
 
@@ -239,11 +187,6 @@ def process_single_item(
     """
     단일 검출 객체 처리 태스크 (병렬 실행됨).
 
-    외부 API 호출:
-    - Claude Vision: 속성 추출 (color, brand, style)
-    - FashionCLIP: 이미지 임베딩 생성
-    - OpenSearch: k-NN 하이브리드 검색
-
     Args:
         analysis_id: Analysis job ID
         image_b64: Base64 encoded image
@@ -253,11 +196,10 @@ def process_single_item(
     Returns:
         Processed item result
     """
-    with _create_span(f"process_single_item_{item_index}") as main_span:
-        if main_span and hasattr(main_span, 'set_attribute'):
-            main_span.set_attribute("analysis.id", analysis_id)
-            main_span.set_attribute("item.index", item_index)
-            main_span.set_attribute("item.category", detected_item_dict.get('category', 'unknown'))
+    with create_span(TRACER_NAME, f"process_single_item_{item_index}") as ctx:
+        ctx.set("analysis.id", analysis_id)
+        ctx.set("item.index", item_index)
+        ctx.set("item.category", detected_item_dict.get('category', 'unknown'))
 
         redis_service = get_redis_service()
 
@@ -272,7 +214,7 @@ def process_single_item(
                 confidence=detected_item_dict['confidence'],
             )
 
-            # 객체 처리 (크롭 → 임베딩 → 검색 → 리랭킹)
+            # 객체 처리 파이프라인 실행
             result = _process_detected_item(
                 analysis_id=analysis_id,
                 image_bytes=image_bytes,
@@ -286,16 +228,13 @@ def process_single_item(
             redis_service.set(completed_key, str(int(current) + 1), ttl=3600)
 
             logger.info(f"Analysis {analysis_id} item {item_index} processed")
-
-            if main_span and hasattr(main_span, 'set_attribute'):
-                main_span.set_attribute("result.matches", len(result.get('matches', [])) if result else 0)
+            ctx.set("result.matches", len(result.get('matches', [])) if result else 0)
 
             return result
 
         except Exception as e:
             logger.error(f"Failed to process item {item_index} for analysis {analysis_id}: {e}")
-            if main_span and hasattr(main_span, 'set_attribute'):
-                main_span.set_attribute("error", str(e))
+            ctx.set("error", str(e))
             raise self.retry(exc=e)
 
 
@@ -309,66 +248,38 @@ def analysis_complete_callback(
     """
     모든 객체 처리 완료 후 호출되는 콜백 태스크.
     결과를 DB에 저장하고 상태를 업데이트합니다.
-
-    Args:
-        results: 각 서브태스크의 결과 목록
-        analysis_id: Analysis job ID
-        user_id: Optional user ID
-        total_items: Total detected items count
-
-    Returns:
-        Final analysis result
     """
-    with _create_span("analysis_complete_callback") as main_span:
-        if main_span and hasattr(main_span, 'set_attribute'):
-            main_span.set_attribute("analysis.id", analysis_id)
-            main_span.set_attribute("total_items", total_items)
+    with create_span(TRACER_NAME, "analysis_complete_callback") as ctx:
+        ctx.set("analysis.id", analysis_id)
+        ctx.set("total_items", total_items)
 
         redis_service = get_redis_service()
 
         try:
             # None 결과 필터링
             valid_results = [r for r in results if r is not None]
-
-            if main_span and hasattr(main_span, 'set_attribute'):
-                main_span.set_attribute("valid_results", len(valid_results))
+            ctx.set("valid_results", len(valid_results))
 
             # DB에 결과 저장
-            with _create_span("7_save_results_to_db") as span:
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("service", "mysql")
-                    span.set_attribute("records_count", len(valid_results))
-
+            with create_span(TRACER_NAME, "7_save_results_to_db") as span:
+                span.set("service", "mysql")
+                span.set("records_count", len(valid_results))
                 redis_service.set_analysis_progress(analysis_id, 90)
                 with ANALYSIS_DURATION.labels(stage='save_results').time():
                     _save_analysis_results(analysis_id, valid_results, user_id)
 
             # 완료 상태 업데이트
-            with _create_span("8_update_status") as span:
+            with create_span(TRACER_NAME, "8_update_status"):
                 redis_service.update_analysis_done(analysis_id, {'items': valid_results})
                 _update_analysis_status_db(analysis_id, 'DONE')
 
-            # Metrics: 분석 완료
-            ANALYSIS_TOTAL.labels(status='success').inc()
-            ANALYSES_COMPLETED_TOTAL.inc()
+            # Metrics 업데이트
+            _update_metrics(valid_results)
             ANALYSIS_IN_PROGRESS.dec()
 
-            # Metrics: 매칭된 상품 수
-            total_matches = 0
-            for result in valid_results:
-                category = result.get('category', 'unknown')
-                match_count = len(result.get('matches', []))
-                total_matches += match_count
-                for _ in range(match_count):
-                    PRODUCT_MATCHES_TOTAL.labels(category=category).inc()
-
             logger.info(f"Analysis {analysis_id} completed: {len(valid_results)}/{total_items} items processed")
+            ctx.set("status", "DONE")
 
-            if main_span and hasattr(main_span, 'set_attribute'):
-                main_span.set_attribute("status", "DONE")
-                main_span.set_attribute("total_matches", total_matches)
-
-            # Celery 워커 메트릭을 Pushgateway로 푸시
             push_metrics()
 
             return {
@@ -382,23 +293,14 @@ def analysis_complete_callback(
             logger.error(f"Failed to complete analysis {analysis_id}: {e}")
             redis_service.update_analysis_failed(analysis_id, str(e))
             _update_analysis_status_db(analysis_id, 'FAILED')
+            ctx.set("status", "FAILED")
+            ctx.set("error", str(e))
 
-            if main_span and hasattr(main_span, 'set_attribute'):
-                main_span.set_attribute("status", "FAILED")
-                main_span.set_attribute("error", str(e))
-
-            # Metrics: 분석 실패
             ANALYSIS_TOTAL.labels(status='failed').inc()
             ANALYSIS_IN_PROGRESS.dec()
-
-            # 실패 시에도 메트릭 푸시
             push_metrics()
 
-            return {
-                'analysis_id': analysis_id,
-                'status': 'FAILED',
-                'error': str(e),
-            }
+            return {'analysis_id': analysis_id, 'status': 'FAILED', 'error': str(e)}
 
 
 @shared_task
@@ -408,18 +310,7 @@ def process_detected_item_task(
     detected_item_dict: dict,
     item_index: int,
 ):
-    """
-    Task for processing a single detected item (for parallel processing).
-
-    Args:
-        analysis_id: Analysis job ID
-        image_bytes: Original image bytes
-        detected_item_dict: Detected item as dict
-        item_index: Item index
-
-    Returns:
-        Processed item result
-    """
+    """Legacy task wrapper for backward compatibility."""
     detected_item = DetectedItem(
         category=detected_item_dict['category'],
         bbox=detected_item_dict['bbox'],
@@ -435,11 +326,224 @@ def process_detected_item_task(
 
 
 # =============================================================================
-# Helper Functions
+# Helper Functions - 객체 처리 파이프라인
+# =============================================================================
+
+def _process_detected_item(
+    analysis_id: str,
+    image_bytes: bytes,
+    detected_item: DetectedItem,
+    item_index: int,
+) -> Optional[dict]:
+    """
+    단일 검출 객체 처리 파이프라인.
+
+    분리된 헬퍼 함수들을 순차적으로 호출합니다.
+    """
+    try:
+        # 1. 이미지 크롭 + GCS 업로드
+        cropped_bytes, pixel_bbox, cropped_image_url = _crop_and_upload(
+            analysis_id, image_bytes, detected_item, item_index
+        )
+
+        # 2. 속성 추출 (Claude Vision)
+        attributes = _extract_attributes(cropped_bytes, detected_item.category)
+
+        # 3. 임베딩 생성 + 검색
+        search_results = _embed_and_search(
+            cropped_bytes, detected_item.category, attributes
+        )
+
+        if not search_results:
+            logger.warning(f"No matching products found for item {item_index}")
+            return None
+
+        # 4. 리랭킹 (Claude)
+        ranked_results = _rerank_results(cropped_bytes, search_results)
+
+        # 5. 결과 포맷팅
+        return _format_item_result(
+            item_index, detected_item, pixel_bbox,
+            cropped_image_url, ranked_results, attributes
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to process item {item_index}: {e}")
+        return None
+
+
+def _crop_and_upload(
+    analysis_id: str,
+    image_bytes: bytes,
+    detected_item: DetectedItem,
+    item_index: int,
+) -> tuple[bytes, dict, Optional[str]]:
+    """이미지 크롭 및 GCS 업로드."""
+    with create_span(TRACER_NAME, "1_crop_image") as span:
+        span.set("item.index", item_index)
+        span.set("item.category", detected_item.category)
+        cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
+
+    with create_span(TRACER_NAME, "2_upload_to_gcs") as span:
+        span.set("service", "google_cloud_storage")
+        cropped_image_url = _upload_to_gcs(
+            image_bytes=cropped_bytes,
+            analysis_id=analysis_id,
+            item_index=item_index,
+            category=detected_item.category,
+        )
+
+    return cropped_bytes, pixel_bbox, cropped_image_url
+
+
+def _extract_attributes(cropped_bytes: bytes, category: str) -> Optional[object]:
+    """Claude Vision으로 속성 추출."""
+    from services.gpt4v_service import get_gpt4v_service
+
+    with create_span(TRACER_NAME, "3_extract_attributes_claude") as span:
+        span.set("service", "anthropic_claude")
+        span.set("purpose", "color_brand_style_extraction")
+        try:
+            gpt4v_service = get_gpt4v_service()
+            with ANALYSIS_DURATION.labels(stage='extract_attributes').time():
+                attributes = gpt4v_service.extract_attributes(
+                    image_bytes=cropped_bytes,
+                    category=category,
+                )
+            span.set("extracted.color", attributes.color or "unknown")
+            span.set("extracted.brand", attributes.brand or "unknown")
+            logger.info(f"GPT-4V attributes: color={attributes.color}, brand={attributes.brand}")
+            return attributes
+        except Exception as e:
+            span.set("error", str(e))
+            logger.warning(f"GPT-4V extraction failed: {e}")
+            return None
+
+
+def _embed_and_search(
+    cropped_bytes: bytes,
+    category: str,
+    attributes: Optional[object],
+) -> list[dict]:
+    """FashionCLIP 임베딩 생성 + OpenSearch 검색."""
+    # 임베딩 생성
+    with create_span(TRACER_NAME, "4_generate_embedding_fashionclip") as span:
+        span.set("service", "marqo_fashionclip")
+        span.set("embedding_dim", 512)
+        embedding_service = get_embedding_service()
+        with ANALYSIS_DURATION.labels(stage='generate_embedding').time():
+            embedding = embedding_service.get_image_embedding(cropped_bytes)
+
+    # 카테고리 정규화 및 속성 추출
+    search_category = normalize_category(category)
+    detected_brand = attributes.brand if attributes else None
+    detected_color = attributes.color if attributes else None
+    detected_secondary = attributes.secondary_color if attributes else None
+    detected_item_type = attributes.item_type if attributes else None
+
+    # OpenSearch 검색
+    with create_span(TRACER_NAME, "5_search_opensearch_knn") as span:
+        span.set("service", "opensearch")
+        span.set("search.category", search_category)
+        span.set("search.brand", detected_brand or "none")
+        span.set("search.color", detected_color or "none")
+        span.set("search.k", SearchConfig.K)
+
+        opensearch_service = OpenSearchService()
+        logger.info(f"Vector search → brand/color boost (brand={detected_brand}, color={detected_color})")
+
+        with ANALYSIS_DURATION.labels(stage='search_products').time():
+            search_results = opensearch_service.search_vector_then_filter(
+                embedding=embedding,
+                category=search_category,
+                brand=detected_brand,
+                color=detected_color,
+                secondary_color=detected_secondary,
+                item_type=detected_item_type,
+                k=SearchConfig.K,
+                search_k=SearchConfig.SEARCH_K,
+            )
+
+        span.set("results.count", len(search_results) if search_results else 0)
+
+    return search_results or []
+
+
+def _rerank_results(cropped_bytes: bytes, search_results: list[dict]) -> list[dict]:
+    """Claude로 리랭킹."""
+    from services.gpt4v_service import get_gpt4v_service
+
+    with create_span(TRACER_NAME, "6_rerank_claude") as span:
+        span.set("service", "anthropic_claude")
+        span.set("purpose", "visual_reranking")
+        span.set("candidates_count", min(SearchConfig.RERANK_TOP_K, len(search_results)))
+
+        try:
+            gpt4v_service = get_gpt4v_service()
+            with ANALYSIS_DURATION.labels(stage='rerank_products').time():
+                ranked = gpt4v_service.rerank_products(
+                    query_image_bytes=cropped_bytes,
+                    candidates=search_results[:SearchConfig.RERANK_TOP_K],
+                    top_k=SearchConfig.FINAL_RESULTS,
+                )
+            logger.info("Claude reranking completed")
+            return ranked
+        except Exception as e:
+            span.set("error", str(e))
+            span.set("fallback", "using_original_order")
+            logger.warning(f"Claude reranking failed, using original results: {e}")
+            return search_results[:SearchConfig.FINAL_RESULTS]
+
+
+def _format_item_result(
+    item_index: int,
+    detected_item: DetectedItem,
+    pixel_bbox: dict,
+    cropped_image_url: Optional[str],
+    search_results: list[dict],
+    attributes: Optional[object],
+) -> dict:
+    """검출 결과 포맷팅."""
+    # 상위 매칭 결과 정리
+    top_matches = []
+    for match in search_results[:SearchConfig.FINAL_RESULTS]:
+        top_matches.append({
+            'product_id': match['product_id'],
+            'score': match.get('combined_score', match['score']),
+            'name': match.get('name'),
+            'image_url': match.get('image_url'),
+            'price': match.get('price'),
+        })
+
+    result = {
+        'index': item_index,
+        'category': detected_item.category,
+        'bbox': pixel_bbox,
+        'confidence': detected_item.confidence,
+        'cropped_image_url': cropped_image_url,
+        'matches': top_matches,
+    }
+
+    # 속성 정보 추가
+    if attributes:
+        result['attributes'] = {
+            'color': attributes.color,
+            'secondary_color': attributes.secondary_color,
+            'brand': attributes.brand,
+            'material': attributes.material,
+            'style': attributes.style,
+            'pattern': attributes.pattern,
+        }
+
+    return result
+
+
+# =============================================================================
+# Helper Functions - 공통 유틸리티
 # =============================================================================
 
 def _update_analysis_status_db(analysis_id: str, status: str):
-    """DB의 ImageAnalysis 상태 업데이트 헬퍼 함수."""
+    """DB의 ImageAnalysis 상태 업데이트."""
     from analyses.models import ImageAnalysis
     try:
         analysis = ImageAnalysis.objects.get(id=analysis_id)
@@ -449,19 +553,28 @@ def _update_analysis_status_db(analysis_id: str, status: str):
         logger.error(f"ImageAnalysis {analysis_id} not found for status update")
 
 
+def _update_metrics(valid_results: list[dict]):
+    """분석 완료 메트릭 업데이트."""
+    ANALYSIS_TOTAL.labels(status='success').inc()
+    ANALYSES_COMPLETED_TOTAL.inc()
+
+    for result in valid_results:
+        category = result.get('category', 'unknown')
+        match_count = len(result.get('matches', []))
+        for _ in range(match_count):
+            PRODUCT_MATCHES_TOTAL.labels(category=category).inc()
+
+
 def _download_image(image_url: str) -> bytes:
     """Download image from URL or local file path."""
     import os
-    from google.cloud import storage
 
     # Convert GCS HTTPS URL to gs:// format
-    # https://storage.googleapis.com/bucket/path -> gs://bucket/path
     if 'storage.googleapis.com' in image_url:
         parts = image_url.split('storage.googleapis.com/')
         if len(parts) > 1:
             image_url = 'gs://' + parts[1]
 
-    # Parse GCS URL: gs://bucket/path/to/file
     if image_url.startswith('gs://'):
         parts = image_url[5:].split('/', 1)
         bucket_name = parts[0]
@@ -472,219 +585,67 @@ def _download_image(image_url: str) -> bytes:
         blob = bucket.blob(blob_name)
 
         return blob.download_as_bytes()
+
     elif image_url.startswith('/media/'):
-        # Local media file - read directly from filesystem
         local_path = settings.BASE_DIR / image_url.lstrip('/')
         if not os.path.exists(local_path):
             raise FileNotFoundError(f"Local file not found: {local_path}")
         with open(local_path, 'rb') as f:
             return f.read()
+
     elif image_url.startswith('http://') or image_url.startswith('https://'):
-        # HTTP URL - use requests
         import requests
         response = requests.get(image_url, timeout=30)
         response.raise_for_status()
         return response.content
+
     else:
         raise ValueError(f"Unsupported URL format: {image_url}")
 
 
-def _detect_objects(image_bytes: bytes) -> list[DetectedItem]:
-    """Detect fashion items in image using Google Vision API."""
-    vision_service = get_vision_service()
-    return vision_service.detect_objects_from_bytes(image_bytes)
-
-
-def _process_detected_item(
-    analysis_id: str,
+def _upload_to_gcs(
     image_bytes: bytes,
-    detected_item: DetectedItem,
+    analysis_id: str,
     item_index: int,
-) -> Optional[dict]:
-    """
-    Process a single detected item.
-
-    1. Crop the item from image
-    2. Upload to GCS
-    3. Extract attributes with Claude Vision (color, brand, etc.)
-    4. Generate embedding
-    5. Search similar products (with attribute filtering)
-
-    Args:
-        analysis_id: Analysis job ID
-        image_bytes: Original image bytes
-        detected_item: Detected item
-        item_index: Item index
-
-    Returns:
-        Processed item result
-    """
+    category: str,
+) -> Optional[str]:
+    """Upload cropped image to GCS."""
     try:
-        # Step 1: Crop image and get pixel bbox
-        with _create_span("1_crop_image") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("item.index", item_index)
-                span.set_attribute("item.category", detected_item.category)
-            cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
+        bucket_name = settings.GCS_BUCKET_NAME
+        credentials_file = settings.GCS_CREDENTIALS_FILE
 
-        # Step 2: Upload cropped image to GCS
-        with _create_span("2_upload_to_gcs") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("service", "google_cloud_storage")
-                span.set_attribute("analysis_id", analysis_id)
-            cropped_image_url = _upload_to_gcs(
-                image_bytes=cropped_bytes,
-                analysis_id=analysis_id,
-                item_index=item_index,
-                category=detected_item.category,
-            )
-
-        # Step 3: Extract attributes with Claude Vision
-        from services.gpt4v_service import get_gpt4v_service
-        attributes = None
-        with _create_span("3_extract_attributes_claude") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("service", "anthropic_claude")
-                span.set_attribute("purpose", "color_brand_style_extraction")
-            try:
-                gpt4v_service = get_gpt4v_service()
-                with ANALYSIS_DURATION.labels(stage='extract_attributes').time():
-                    attributes = gpt4v_service.extract_attributes(
-                        image_bytes=cropped_bytes,
-                        category=detected_item.category,
-                    )
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("extracted.color", attributes.color or "unknown")
-                    span.set_attribute("extracted.brand", attributes.brand or "unknown")
-                logger.info(f"Item {item_index} - GPT-4V attributes: color={attributes.color}, secondary_color={attributes.secondary_color}, brand={attributes.brand}")
-            except Exception as e:
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("error", str(e))
-                logger.warning(f"GPT-4V extraction failed: {e}")
-                attributes = None
-
-        # Step 4: Generate embedding with FashionCLIP
-        with _create_span("4_generate_embedding_fashionclip") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("service", "marqo_fashionclip")
-                span.set_attribute("embedding_dim", 512)
-            embedding_service = get_embedding_service()
-            with ANALYSIS_DURATION.labels(stage='generate_embedding').time():
-                embedding = embedding_service.get_image_embedding(cropped_bytes)
-
-        # Step 5: Search similar products in OpenSearch
-        # Vision API 카테고리 → OpenSearch 카테고리 매핑
-        category_mapping = {
-            'bottom': 'pants',
-            'outerwear': 'outer',
-        }
-        search_category = category_mapping.get(detected_item.category, detected_item.category)
-
-        detected_brand = attributes.brand if attributes else None
-        detected_color = attributes.color if attributes else None
-        detected_secondary = attributes.secondary_color if attributes else None
-        detected_item_type = attributes.item_type if attributes else None
-
-        with _create_span("5_search_opensearch_knn") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("service", "opensearch")
-                span.set_attribute("search.category", search_category)
-                span.set_attribute("search.brand", detected_brand or "none")
-                span.set_attribute("search.color", detected_color or "none")
-                span.set_attribute("search.k", 30)
-            opensearch_service = OpenSearchService()
-            logger.info(f"Item {item_index} - Vector search → brand/color boost (brand={detected_brand}, color={detected_color}, secondary={detected_secondary})")
-            with ANALYSIS_DURATION.labels(stage='search_products').time():
-                search_results = opensearch_service.search_vector_then_filter(
-                    embedding=embedding,
-                    category=search_category,
-                    brand=detected_brand,
-                    color=detected_color,
-                    secondary_color=detected_secondary,
-                    item_type=detected_item_type,
-                    k=30,
-                    search_k=400,
-                )
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("results.count", len(search_results) if search_results else 0)
-
-        if not search_results:
-            logger.warning(f"No matching products found for item {item_index}")
+        if not bucket_name or not credentials_file:
+            logger.warning("GCS not configured, skipping upload")
             return None
 
-        # Step 6: Claude reranking for better accuracy
-        with _create_span("6_rerank_claude") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("service", "anthropic_claude")
-                span.set_attribute("purpose", "visual_reranking")
-                span.set_attribute("candidates_count", min(10, len(search_results)))
-            try:
-                gpt4v_service = get_gpt4v_service()
-                with ANALYSIS_DURATION.labels(stage='rerank_products').time():
-                    search_results = gpt4v_service.rerank_products(
-                        query_image_bytes=cropped_bytes,
-                        candidates=search_results[:10],  # 상위 10개만 리랭킹
-                        top_k=5,
-                    )
-                logger.info(f"Item {item_index} - Claude reranking completed")
-            except Exception as e:
-                if span and hasattr(span, 'set_attribute'):
-                    span.set_attribute("error", str(e))
-                    span.set_attribute("fallback", "using_original_order")
-                logger.warning(f"Claude reranking failed, using original results: {e}")
-                search_results = search_results[:5]
+        client = storage.Client.from_service_account_json(credentials_file)
+        bucket = client.bucket(bucket_name)
 
-        # 상위 5개 매칭 결과 반환
-        top_matches = []
-        for match in search_results[:5]:
-            top_matches.append({
-                'product_id': match['product_id'],
-                'score': match.get('combined_score', match['score']),
-                'name': match.get('name'),
-                'image_url': match.get('image_url'),
-                'price': match.get('price'),
-            })
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"cropped/{analysis_id}/{timestamp}_{item_index}_{category}.jpg"
 
-        # 결과에 추출된 속성 정보 포함
-        result = {
-            'index': item_index,
-            'category': detected_item.category,
-            'bbox': pixel_bbox,
-            'confidence': detected_item.confidence,
-            'cropped_image_url': cropped_image_url,  # GCS URL
-            'matches': top_matches,  # 상위 5개
-        }
+        blob = bucket.blob(filename)
+        blob.upload_from_string(image_bytes, content_type='image/jpeg')
 
-        # GPT-4V 속성 추가 (있으면)
-        if attributes:
-            result['attributes'] = {
-                'color': attributes.color,
-                'secondary_color': attributes.secondary_color,
-                'brand': attributes.brand,
-                'material': attributes.material,
-                'style': attributes.style,
-                'pattern': attributes.pattern,
-            }
+        gcs_url = f"https://storage.googleapis.com/{bucket_name}/{filename}"
+        logger.info(f"Uploaded cropped image to GCS: {gcs_url}")
 
-        return result
+        return gcs_url
 
     except Exception as e:
-        logger.error(f"Failed to process item {item_index}: {e}")
+        logger.error(f"Failed to upload to GCS: {e}")
         return None
 
 
-def _crop_image(image_bytes: bytes, item: DetectedItem, padding_ratio: float = 0.25) -> tuple[bytes, dict]:
-    """
-    Crop detected item from image with padding for better embedding quality.
+def _crop_image(
+    image_bytes: bytes,
+    item: DetectedItem,
+    padding_ratio: float = None,
+) -> tuple[bytes, dict]:
+    """Crop detected item from image with padding."""
+    if padding_ratio is None:
+        padding_ratio = ImageConfig.BBOX_PADDING_RATIO
 
-    Args:
-        image_bytes: Original image bytes
-        item: Detected item with bounding box
-        padding_ratio: Padding as ratio of bbox size (default 25%)
-
-    Returns:
-        Tuple of (cropped image bytes, pixel bbox dict)
-    """
     image = Image.open(io.BytesIO(image_bytes))
     width, height = image.size
 
@@ -695,8 +656,7 @@ def _crop_image(image_bytes: bytes, item: DetectedItem, padding_ratio: float = 0
     x_max = int(bbox.x_max * width / 1000)
     y_max = int(bbox.y_max * height / 1000)
 
-    # Original pixel bbox for storage (without padding)
-    # 원본 이미지 크기도 포함 (정규화용)
+    # 원본 pixel bbox 저장
     pixel_bbox = {
         'x_min': x_min,
         'y_min': y_min,
@@ -704,28 +664,25 @@ def _crop_image(image_bytes: bytes, item: DetectedItem, padding_ratio: float = 0
         'y_max': y_max,
         'width': x_max - x_min,
         'height': y_max - y_min,
-        'image_width': width,    # 원본 이미지 너비
-        'image_height': height,  # 원본 이미지 높이
+        'image_width': width,
+        'image_height': height,
     }
 
-    # Add padding for better embedding (more context helps CLIP)
+    # Add padding
     bbox_width = x_max - x_min
     bbox_height = y_max - y_min
     pad_x = int(bbox_width * padding_ratio)
     pad_y = int(bbox_height * padding_ratio)
 
-    # Expanded bbox with padding (clamped to image bounds)
     crop_x_min = max(0, x_min - pad_x)
     crop_y_min = max(0, y_min - pad_y)
     crop_x_max = min(width, x_max + pad_x)
     crop_y_max = min(height, y_max + pad_y)
 
-    # Crop with padding
     cropped = image.crop((crop_x_min, crop_y_min, crop_x_max, crop_y_max))
 
-    # Convert to bytes
     output = io.BytesIO()
-    cropped.save(output, format='JPEG', quality=95)
+    cropped.save(output, format='JPEG', quality=ImageConfig.JPEG_QUALITY)
     return output.getvalue(), pixel_bbox
 
 
@@ -734,38 +691,18 @@ def _save_analysis_results(
     results: list[dict],
     user_id: Optional[int],
 ):
-    """
-    Save analysis results to MySQL.
-
-    Updates:
-    - ImageAnalysis: status = DONE
-    - DetectedObject: insert detected items with bbox
-    - ObjectProductMapping: insert top matches for each object
-    """
+    """Save analysis results to MySQL."""
     from analyses.models import ImageAnalysis, DetectedObject, ObjectProductMapping
-    from products.models import Product
 
     try:
-        # 1. ImageAnalysis 조회 및 상태 업데이트
         analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
         uploaded_image = analysis.uploaded_image
 
-        # 2. 각 검출 결과에 대해 DetectedObject 및 매핑 생성
         for result in results:
-            # bbox를 0-1 범위로 정규화
-            # 이미지 크기는 결과에 포함된 값 사용 (GCS 이미지라서 로컬에서 못 열 수 있음)
-            bbox = result.get('bbox', {})
-            img_width = bbox.get('image_width', 1000)
-            img_height = bbox.get('image_height', 1000)
+            # 1. bbox 정규화
+            normalized_bbox = _normalize_result_bbox(result.get('bbox', {}))
 
-            normalized_bbox = {
-                'x1': bbox.get('x_min', 0) / img_width if img_width > 0 else 0,
-                'y1': bbox.get('y_min', 0) / img_height if img_height > 0 else 0,
-                'x2': bbox.get('x_max', 0) / img_width if img_width > 0 else 0,
-                'y2': bbox.get('y_max', 0) / img_height if img_height > 0 else 0,
-            }
-
-            # DetectedObject 생성
+            # 2. DetectedObject 생성
             detected_object = DetectedObject.objects.create(
                 uploaded_image=uploaded_image,
                 object_category=result.get('category', 'unknown'),
@@ -777,47 +714,13 @@ def _save_analysis_results(
 
             logger.info(f"Created DetectedObject {detected_object.id} - {result.get('category')}")
 
-            # ObjectProductMapping 생성 (상위 매칭 상품들 - Product 자동 생성 포함)
-            matches = result.get('matches', [])
-            mapping_count = 0
-            for match in matches:
-                product_id = match.get('product_id')  # 무신사 itemId
-                if product_id:
-                    try:
-                        # 1. 기존 Product 검색
-                        product = Product.objects.filter(
-                            product_url__endswith=f'/{product_id}'
-                        ).first()
-
-                        # 2. 없으면 검색 결과로 자동 생성
-                        if not product:
-                            product, created = Product.objects.update_or_create(
-                                product_url=f'https://www.musinsa.com/app/goods/{product_id}',
-                                defaults={
-                                    'brand_name': match.get('brand', 'Unknown') or 'Unknown',
-                                    'product_name': match.get('name', 'Unknown') or 'Unknown',
-                                    'category': result.get('category', 'unknown'),
-                                    'selling_price': int(match.get('price', 0) or 0),
-                                    'product_image_url': match.get('image_url', '') or '',
-                                }
-                            )
-                            if created:
-                                logger.info(f"Auto-created Product {product_id}")
-
-                        # 3. 매핑 생성
-                        ObjectProductMapping.objects.create(
-                            detected_object=detected_object,
-                            product=product,
-                            confidence_score=match.get('score', 0.0),
-                        )
-                        mapping_count += 1
-
-                    except Exception as e:
-                        logger.warning(f"Error creating mapping for product {product_id}: {e}")
-
+            # 3. 상품 매핑 생성
+            mapping_count = _create_product_mappings(
+                detected_object, result.get('matches', []), result.get('category', 'unknown')
+            )
             logger.info(f"Created {mapping_count} mappings for object {detected_object.id}")
 
-        # 3. ImageAnalysis 상태 업데이트
+        # 상태 업데이트
         analysis.image_analysis_status = ImageAnalysis.Status.DONE
         analysis.save()
 
@@ -827,3 +730,49 @@ def _save_analysis_results(
         logger.error(f"ImageAnalysis {analysis_id} not found")
     except Exception as e:
         logger.error(f"Failed to save analysis results: {e}")
+
+
+def _normalize_result_bbox(bbox: dict) -> dict:
+    """결과의 bbox를 0-1 범위로 정규화."""
+    img_width = bbox.get('image_width', 1000)
+    img_height = bbox.get('image_height', 1000)
+
+    return {
+        'x1': bbox.get('x_min', 0) / img_width if img_width > 0 else 0,
+        'y1': bbox.get('y_min', 0) / img_height if img_height > 0 else 0,
+        'x2': bbox.get('x_max', 0) / img_width if img_width > 0 else 0,
+        'y2': bbox.get('y_max', 0) / img_height if img_height > 0 else 0,
+    }
+
+
+def _create_product_mappings(
+    detected_object,
+    matches: list[dict],
+    default_category: str,
+) -> int:
+    """상품 매핑 생성 (Product 자동 생성 포함)."""
+    from analyses.models import ObjectProductMapping
+
+    mapping_count = 0
+    for match in matches:
+        product_id = match.get('product_id')
+        if product_id:
+            try:
+                # 공통 유틸리티로 Product 조회/생성
+                product = get_or_create_product_from_search(
+                    product_id=str(product_id),
+                    search_result=match,
+                    default_category=default_category,
+                )
+
+                ObjectProductMapping.objects.create(
+                    detected_object=detected_object,
+                    product=product,
+                    confidence_score=match.get('score', 0.0),
+                )
+                mapping_count += 1
+
+            except Exception as e:
+                logger.warning(f"Error creating mapping for product {product_id}: {e}")
+
+    return mapping_count
