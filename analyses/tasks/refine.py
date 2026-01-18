@@ -9,7 +9,6 @@ Refine Analysis Tasks - 자연어 기반 재분석 병렬 처리.
 """
 
 import logging
-import requests
 import numpy as np
 from io import BytesIO
 from typing import Optional
@@ -32,6 +31,7 @@ from analyses.utils import (
     build_fashion_description,
     get_or_create_product_from_search,
 )
+from analyses.tasks.storage import download_image
 
 
 logger = logging.getLogger(__name__)
@@ -472,11 +472,15 @@ def _download_and_crop_image(
     bbox_x2: float,
     bbox_y2: float,
 ) -> Image.Image:
-    """이미지 URL에서 다운로드 후 바운딩 박스로 크롭."""
-    response = requests.get(image_url, timeout=30)
-    response.raise_for_status()
+    """
+    이미지 URL에서 다운로드 후 바운딩 박스로 크롭.
 
-    img = Image.open(BytesIO(response.content))
+    storage.py의 download_image를 활용하여 GCS, HTTP, 로컬 파일을 지원합니다.
+    """
+    # 공통 다운로드 함수 사용
+    image_bytes = download_image(image_url)
+
+    img = Image.open(BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
 
