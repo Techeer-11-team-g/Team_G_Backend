@@ -14,7 +14,6 @@ Note:
 """
 
 import logging
-from contextlib import nullcontext
 
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
@@ -24,6 +23,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from analyses.utils import create_span
 from .models import FittingImage
 from .serializers import (
     FittingImageSerializer,
@@ -35,52 +35,8 @@ from .tasks import process_fitting_task
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
-# OpenTelemetry 트레이싱 유틸리티
-# =============================================================================
-
-def _get_tracer():
-    """
-    OpenTelemetry Tracer를 지연 로딩합니다.
-    
-    Returns:
-        Tracer | None: TracerProvider가 초기화된 경우 Tracer, 아니면 None
-    """
-    try:
-        from opentelemetry import trace
-        return trace.get_tracer("fittings.views")
-    except ImportError:
-        return None
-
-
-def _create_span(name: str):
-    """
-    트레이싱 span을 생성합니다.
-    
-    Args:
-        name: span 이름
-        
-    Returns:
-        Span | nullcontext: Tracer가 있으면 Span, 없으면 nullcontext
-    """
-    tracer = _get_tracer()
-    if tracer:
-        return tracer.start_as_current_span(name)
-    return nullcontext()
-
-
-def _set_span_attr(span, key: str, value):
-    """
-    span에 attribute를 안전하게 설정합니다.
-    
-    Args:
-        span: OpenTelemetry Span 객체
-        key: attribute 키
-        value: attribute 값
-    """
-    if span and hasattr(span, 'set_attribute'):
-        span.set_attribute(key, value)
+# 트레이서 모듈명
+TRACER_NAME = "fittings.views"
 
 
 # =============================================================================
@@ -125,8 +81,8 @@ class UserImageUploadView(APIView):
     )
     def post(self, request):
         """사용자 전신 이미지를 업로드합니다."""
-        with _create_span("api_user_image_upload") as span:
-            _set_span_attr(span, "user.id", request.user.id)
+        with create_span(TRACER_NAME, "api_user_image_upload") as span:
+            span.set("user.id", request.user.id)
 
             serializer = UserImageUploadSerializer(
                 data=request.data,
@@ -143,7 +99,7 @@ class UserImageUploadView(APIView):
                         'user_image_id': user_image.id,
                     }
                 )
-                _set_span_attr(span, "user_image.id", user_image.id)
+                span.set("user_image.id", user_image.id)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -182,8 +138,8 @@ class FittingRequestView(APIView):
     )
     def post(self, request):
         """가상 피팅을 요청합니다."""
-        with _create_span("api_fitting_request") as span:
-            _set_span_attr(span, "user.id", request.user.id)
+        with create_span(TRACER_NAME, "api_fitting_request") as span:
+            span.set("user.id", request.user.id)
 
             serializer = FittingImageSerializer(
                 data=request.data,
@@ -215,8 +171,8 @@ class FittingRequestView(APIView):
                         'product_id': product.id,
                     }
                 )
-                _set_span_attr(span, "fitting.cache_hit", True)
-                _set_span_attr(span, "fitting.id", existing_fitting.id)
+                span.set("fitting.cache_hit", True)
+                span.set("fitting.id", existing_fitting.id)
                 result_serializer = FittingResultSerializer(existing_fitting)
                 return Response(result_serializer.data, status=status.HTTP_200_OK)
 
@@ -239,8 +195,8 @@ class FittingRequestView(APIView):
                     'user_image_id': user_image.id,
                 }
             )
-            _set_span_attr(span, "fitting.cache_hit", False)
-            _set_span_attr(span, "fitting.id", fitting.id)
+            span.set("fitting.cache_hit", False)
+            span.set("fitting.id", fitting.id)
 
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -273,11 +229,11 @@ class FittingStatusView(APIView):
     )
     def get(self, request, fitting_image_id):
         """피팅 작업의 현재 상태를 조회합니다."""
-        with _create_span("api_fitting_status") as span:
-            _set_span_attr(span, "fitting.id", fitting_image_id)
+        with create_span(TRACER_NAME, "api_fitting_status") as span:
+            span.set("fitting.id", fitting_image_id)
 
             fitting = get_object_or_404(FittingImage, id=fitting_image_id)
-            _set_span_attr(span, "fitting.status", fitting.fitting_image_status)
+            span.set("fitting.status", fitting.fitting_image_status)
 
             serializer = FittingStatusSerializer(fitting)
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -312,14 +268,14 @@ class FittingResultView(APIView):
     )
     def get(self, request, fitting_image_id):
         """피팅 결과를 조회합니다."""
-        with _create_span("api_fitting_result") as span:
-            _set_span_attr(span, "fitting.id", fitting_image_id)
+        with create_span(TRACER_NAME, "api_fitting_result") as span:
+            span.set("fitting.id", fitting_image_id)
 
             fitting = get_object_or_404(FittingImage, id=fitting_image_id)
-            _set_span_attr(span, "fitting.status", fitting.fitting_image_status)
+            span.set("fitting.status", fitting.fitting_image_status)
             
             if fitting.fitting_image_url:
-                _set_span_attr(span, "fitting.has_result", True)
+                span.set("fitting.has_result", True)
 
             serializer = FittingResultSerializer(fitting)
             return Response(serializer.data, status=status.HTTP_200_OK)

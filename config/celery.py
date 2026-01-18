@@ -25,7 +25,10 @@ app.conf.task_default_queue = 'default'
 
 # 태스크별 큐 라우팅
 app.conf.task_routes = {
-    'analyses.tasks.*': {'queue': 'analysis'},
+    'analyses.tasks.analysis.*': {'queue': 'analysis'},
+    'analyses.tasks.refine.*': {'queue': 'analysis'},
+    'analyses.tasks.upload.*': {'queue': 'analysis'},
+    'analyses.tasks.fitting.*': {'queue': 'analysis'},
     'fittings.tasks.*': {'queue': 'fitting'},
 }
 
