@@ -137,8 +137,14 @@ class UploadedImageView(APIView):
 
             # 4. Celery 태스크로 GCS 업로드 (외부 API 호출)
             try:
+                # Inject trace context for Celery
+                from opentelemetry.propagate import inject
+                headers = {}
+                inject(headers)
+
                 result = upload_image_to_gcs_task.apply_async(
-                    args=[image_b64, file.name, file.content_type, user_id]
+                    args=[image_b64, file.name, file.content_type, user_id],
+                    headers=headers,
                 ).get(timeout=60)  # 60초 타임아웃
 
                 logger.info(f"Image uploaded via Celery: {result.get('uploaded_image_id')}")
@@ -310,9 +316,15 @@ class ImageAnalysisView(APIView):
         available_categories = list(detected_objects.values_list('object_category', flat=True).distinct())
 
         try:
+            # Inject trace context for Celery
+            from opentelemetry.propagate import inject
+            lc_headers = {}
+            inject(lc_headers)
+
             # Celery 태스크로 LangChain 파싱 실행 (timeout: 30초)
             parsed_query = parse_refine_query_task.apply_async(
-                args=[query, available_categories]
+                args=[query, available_categories],
+                headers=lc_headers,
             ).get(timeout=30)
 
             logger.info(f"Parsed refine query (async): {parsed_query}")
@@ -368,13 +380,18 @@ class ImageAnalysisView(APIView):
         # 6. Celery Group으로 병렬 처리 (외부 API: CLIP, OpenSearch)
         refine_id = str(uuid.uuid4())
         try:
-            # 각 객체별 서브태스크 생성
+            # Inject trace context for Celery group tasks
+            from opentelemetry.propagate import inject
+            refine_headers = {}
+            inject(refine_headers)
+
+            # 각 객체별 서브태스크 생성 (with trace context)
             subtasks = [
                 refine_single_object.s(
                     refine_id=refine_id,
                     detected_object_id=obj_id,
                     parsed_query=parsed_query,
-                )
+                ).set(headers=refine_headers)
                 for obj_id in target_object_ids
             ]
 
@@ -436,12 +453,17 @@ class ImageAnalysisView(APIView):
             if not image_url and uploaded_image.uploaded_image_url:
                 image_url = uploaded_image.uploaded_image_url.url
 
-            # Celery task 트리거
+            # Celery task 트리거 (with trace context propagation)
             try:
-                process_image_analysis.delay(
-                    analysis_id=str(analysis.id),
-                    image_url=image_url,
-                    user_id=request.user.id if request.user.is_authenticated else None,
+                # Inject current trace context into headers for Celery
+                from opentelemetry.propagate import inject
+                headers = {}
+                inject(headers)
+
+                process_image_analysis.apply_async(
+                    args=[str(analysis.id), image_url],
+                    kwargs={'user_id': request.user.id if request.user.is_authenticated else None},
+                    headers=headers,
                 )
                 logger.info(f"Analysis task triggered: {analysis.id}")
                 if span and hasattr(span, 'set_attribute'):

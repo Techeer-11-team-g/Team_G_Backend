@@ -1,3 +1,6 @@
+import logging
+from contextlib import nullcontext
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -13,6 +16,25 @@ from .serializers import (
     UserImageUploadSerializer
 )
 from .tasks import process_fitting_task
+
+logger = logging.getLogger(__name__)
+
+
+def _get_tracer():
+    """Get tracer lazily to ensure TracerProvider is initialized."""
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer("fittings.views")
+    except ImportError:
+        return None
+
+
+def _create_span(name: str):
+    """Create a span if tracer is available."""
+    tracer = _get_tracer()
+    if tracer:
+        return tracer.start_as_current_span(name)
+    return nullcontext()
 
 
 class UserImageUploadView(APIView):
@@ -45,23 +67,30 @@ class UserImageUploadView(APIView):
         responses={201: UserImageUploadSerializer}
     )
     def post(self, request):
-        serializer = UserImageUploadSerializer(
-            data=request.data,
-            context={'request': request}
-        )
+        with _create_span("api_user_image_upload") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("user.id", request.user.id)
 
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            serializer = UserImageUploadSerializer(
+                data=request.data,
+                context={'request': request}
+            )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            if serializer.is_valid():
+                user_image = serializer.save()
+                logger.info(f"User image uploaded: {user_image.id}")
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("user_image.id", user_image.id)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class FittingRequestView(APIView):
     """
     [POST] 가상 피팅 요청
     POST /api/v1/fitting-images
-    
+
     동일한 (user_image, product) 조합에 대해 완료된 피팅이 있으면
     API 호출 없이 기존 결과를 재사용합니다.
     """
@@ -78,34 +107,52 @@ class FittingRequestView(APIView):
         }
     )
     def post(self, request):
-        serializer = FittingImageSerializer(
-            data=request.data,
-            context={'request': request}
-        )
+        with _create_span("api_fitting_request") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("user.id", request.user.id)
 
-        if serializer.is_valid():
-            user_image = serializer.validated_data.get('user_image_url')  # validate에서 UserImage 객체로 변환됨
-            product = serializer.validated_data.get('product')
-            
-            # 캐싱: 동일한 조합의 완료된 피팅이 있는지 확인
-            existing_fitting = FittingImage.objects.filter(
-                user_image=user_image,
-                product=product,
-                fitting_image_status=FittingImage.Status.DONE,
-                is_deleted=False
-            ).first()
-            
-            if existing_fitting:
-                # 기존 완료된 피팅 결과 재사용 (API 호출 절약)
-                result_serializer = FittingResultSerializer(existing_fitting)
-                return Response(result_serializer.data, status=status.HTTP_200_OK)
-            
-            # 신규 피팅 생성
-            fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
-            process_fitting_task.delay(fitting.id)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            serializer = FittingImageSerializer(
+                data=request.data,
+                context={'request': request}
+            )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            if serializer.is_valid():
+                user_image = serializer.validated_data.get('user_image_url')
+                product = serializer.validated_data.get('product')
+
+                # 캐싱: 동일한 조합의 완료된 피팅이 있는지 확인
+                existing_fitting = FittingImage.objects.filter(
+                    user_image=user_image,
+                    product=product,
+                    fitting_image_status=FittingImage.Status.DONE,
+                    is_deleted=False
+                ).first()
+
+                if existing_fitting:
+                    logger.info(f"Fitting cache hit: {existing_fitting.id}")
+                    if span and hasattr(span, 'set_attribute'):
+                        span.set_attribute("fitting.cache_hit", True)
+                        span.set_attribute("fitting.id", existing_fitting.id)
+                    result_serializer = FittingResultSerializer(existing_fitting)
+                    return Response(result_serializer.data, status=status.HTTP_200_OK)
+
+                # 신규 피팅 생성
+                fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
+
+                # Inject trace context for Celery
+                from opentelemetry.propagate import inject
+                headers = {}
+                inject(headers)
+                process_fitting_task.apply_async(args=[fitting.id], headers=headers)
+
+                logger.info(f"Fitting request created: {fitting.id}")
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("fitting.cache_hit", False)
+                    span.set_attribute("fitting.id", fitting.id)
+
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class FittingStatusView(APIView):
@@ -122,9 +169,17 @@ class FittingStatusView(APIView):
         responses={200: FittingStatusSerializer}
     )
     def get(self, request, fitting_image_id):
-        fitting = get_object_or_404(FittingImage, id=fitting_image_id)
-        serializer = FittingStatusSerializer(fitting)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        with _create_span("api_fitting_status") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("fitting.id", fitting_image_id)
+
+            fitting = get_object_or_404(FittingImage, id=fitting_image_id)
+
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("fitting.status", fitting.fitting_image_status)
+
+            serializer = FittingStatusSerializer(fitting)
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class FittingResultView(APIView):
@@ -141,6 +196,16 @@ class FittingResultView(APIView):
         responses={200: FittingResultSerializer}
     )
     def get(self, request, fitting_image_id):
-        fitting = get_object_or_404(FittingImage, id=fitting_image_id)
-        serializer = FittingResultSerializer(fitting)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        with _create_span("api_fitting_result") as span:
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("fitting.id", fitting_image_id)
+
+            fitting = get_object_or_404(FittingImage, id=fitting_image_id)
+
+            if span and hasattr(span, 'set_attribute'):
+                span.set_attribute("fitting.status", fitting.fitting_image_status)
+                if fitting.fitting_image_url:
+                    span.set_attribute("fitting.has_result", True)
+
+            serializer = FittingResultSerializer(fitting)
+            return Response(serializer.data, status=status.HTTP_200_OK)

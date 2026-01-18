@@ -24,8 +24,19 @@ import time
 import logging
 from contextlib import contextmanager
 from prometheus_client import Counter, Histogram, Gauge, push_to_gateway, REGISTRY
+from prometheus_client import ProcessCollector, PlatformCollector, REGISTRY as PROM_REGISTRY
 
 logger = logging.getLogger(__name__)
+
+# Process metrics collector 등록 (CPU, Memory 등)
+# django-prometheus가 자동으로 등록하지 않으므로 명시적으로 추가
+try:
+    ProcessCollector(registry=PROM_REGISTRY)
+    PlatformCollector(registry=PROM_REGISTRY)
+    logger.info("Process and Platform collectors registered")
+except ValueError:
+    # Already registered
+    pass
 
 # Pushgateway 설정 (Celery 워커용)
 PUSHGATEWAY_URL = os.getenv('PUSHGATEWAY_URL', 'localhost:9091')
@@ -98,10 +109,47 @@ ANALYSES_COMPLETED_TOTAL = Counter(
     'Total number of analyses completed successfully'
 )
 
+# =============================================================================
+# User Metrics
+# =============================================================================
+
+USERS_REGISTERED_TOTAL = Counter(
+    'teamg_users_registered_total',
+    'Total number of user registrations'
+)
+
+USER_LOGINS_TOTAL = Counter(
+    'teamg_user_logins_total',
+    'Total number of user logins',
+    ['status']  # success, failed
+)
+
+# =============================================================================
+# Order Metrics
+# =============================================================================
+
+ORDERS_CREATED_TOTAL = Counter(
+    'teamg_orders_created_total',
+    'Total number of orders created'
+)
+
+CART_ITEMS_TOTAL = Counter(
+    'teamg_cart_items_total',
+    'Cart item operations',
+    ['action']  # added, removed
+)
+
 FITTINGS_REQUESTED_TOTAL = Counter(
     'teamg_fittings_requested_total',
     'Virtual fitting requests by status',
     ['status']
+)
+
+FITTING_DURATION = Histogram(
+    'teamg_fitting_duration_seconds',
+    'Time spent processing virtual fitting requests',
+    ['category'],
+    buckets=(1.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 180.0)
 )
 
 PRODUCT_MATCHES_TOTAL = Counter(

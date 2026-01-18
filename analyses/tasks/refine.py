@@ -6,6 +6,7 @@ import logging
 import requests
 import numpy as np
 from io import BytesIO
+from contextlib import nullcontext
 from PIL import Image
 
 from celery import shared_task, chord
@@ -15,6 +16,23 @@ from services.embedding_service import get_embedding_service
 from services.opensearch_client import OpenSearchService
 
 logger = logging.getLogger(__name__)
+
+
+def _get_tracer():
+    """Get tracer lazily to ensure TracerProvider is initialized."""
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer("analyses.tasks.refine")
+    except ImportError:
+        return None
+
+
+def _create_span(name: str):
+    """Create a span if tracer is available."""
+    tracer = _get_tracer()
+    if tracer:
+        return tracer.start_as_current_span(name)
+    return nullcontext()
 
 
 def _download_and_crop_image(image_url: str, bbox_x1: float, bbox_y1: float, bbox_x2: float, bbox_y2: float) -> Image.Image:

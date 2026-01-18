@@ -12,11 +12,14 @@ from django.conf import settings
 from google.cloud import storage
 
 # OpenTelemetry for custom tracing spans
-try:
-    from opentelemetry import trace
-    tracer = trace.get_tracer("analyses.tasks.upload")
-except ImportError:
-    tracer = None
+def _get_tracer():
+    """Get tracer lazily to ensure TracerProvider is initialized."""
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer("analyses.tasks.upload")
+    except ImportError:
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ def upload_image_to_gcs_task(
     from contextlib import nullcontext
 
     def create_span(name):
+        tracer = _get_tracer()
         if tracer:
             return tracer.start_as_current_span(name)
         return nullcontext()

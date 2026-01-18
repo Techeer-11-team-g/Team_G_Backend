@@ -45,11 +45,14 @@ from services.metrics import (
 )
 
 # OpenTelemetry for custom tracing spans
-try:
-    from opentelemetry import trace
-    tracer = trace.get_tracer("analyses.tasks.analysis")
-except ImportError:
-    tracer = None
+def _get_tracer():
+    """Get tracer lazily to ensure TracerProvider is initialized."""
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer("analyses.tasks.analysis")
+    except ImportError:
+        return None
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +101,15 @@ def _upload_to_gcs(image_bytes: bytes, analysis_id: str, item_index: int, catego
         return None
 
 
+def _create_span(name: str):
+    """Create a span if tracer is available."""
+    tracer = _get_tracer()
+    if tracer:
+        return tracer.start_as_current_span(name)
+    from contextlib import nullcontext
+    return nullcontext()
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def process_image_analysis(
     self,
@@ -119,76 +131,101 @@ def process_image_analysis(
     Returns:
         Analysis result dict
     """
-    redis_service = get_redis_service()
-    ANALYSIS_IN_PROGRESS.inc()
+    with _create_span("process_image_analysis") as main_span:
+        if main_span and hasattr(main_span, 'set_attribute'):
+            main_span.set_attribute("analysis.id", analysis_id)
+            main_span.set_attribute("image.url", image_url[:100] if image_url else "")
 
-    try:
-        # Update status to RUNNING
-        # (Redis 임시 저장: 실시간 진행률 표시용)
-        redis_service.update_analysis_running(analysis_id, progress=0)
-        logger.info(f"Starting analysis {analysis_id}")
+        redis_service = get_redis_service()
+        ANALYSIS_IN_PROGRESS.inc()
 
-        # Step 1: Download image from GCS
-        # (Redis 임시 저장: 단계별 진행률 업데이트)
-        redis_service.set_analysis_progress(analysis_id, 10)
-        with ANALYSIS_DURATION.labels(stage='download_image').time():
-            image_bytes = _download_image(image_url)
+        try:
+            # Update status to RUNNING
+            redis_service.update_analysis_running(analysis_id, progress=0)
+            logger.info(f"Starting analysis {analysis_id}")
 
-        # Step 2: Detect objects with Vision API (외부 API 호출)
-        redis_service.set_analysis_progress(analysis_id, 20)
-        with ANALYSIS_DURATION.labels(stage='detect_objects').time():
-            detected_items = _detect_objects(image_bytes)
-        logger.info(f"Detected {len(detected_items)} items")
+            # Step 1: Download image from GCS
+            with _create_span("1_download_image_gcs") as span:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("service", "google_cloud_storage")
+                redis_service.set_analysis_progress(analysis_id, 10)
+                with ANALYSIS_DURATION.labels(stage='download_image').time():
+                    image_bytes = _download_image(image_url)
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("image.size_bytes", len(image_bytes))
 
-        if not detected_items:
-            # (Redis 임시 저장: 결과 캐싱 및 완료 상태)
-            redis_service.update_analysis_done(analysis_id, {'items': []})
-            _update_analysis_status_db(analysis_id, 'DONE')
-            return {'analysis_id': analysis_id, 'items': []}
+            # Step 2: Detect objects with Vision API
+            with _create_span("2_detect_objects_vision_api") as span:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("service", "google_vision_api")
+                redis_service.set_analysis_progress(analysis_id, 20)
+                with ANALYSIS_DURATION.labels(stage='detect_objects').time():
+                    vision_service = get_vision_service()
+                    detected_items = vision_service.detect_objects_from_bytes(image_bytes)
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("detected.count", len(detected_items))
+                    if detected_items:
+                        span.set_attribute("detected.categories", ",".join(set(i.category for i in detected_items)))
+            logger.info(f"Detected {len(detected_items)} items")
 
-        # Step 3: 병렬 처리를 위해 이미지를 base64로 인코딩
-        # (Celery는 bytes를 직접 전달하기 어려움)
-        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+            if not detected_items:
+                redis_service.update_analysis_done(analysis_id, {'items': []})
+                _update_analysis_status_db(analysis_id, 'DONE')
+                if main_span and hasattr(main_span, 'set_attribute'):
+                    main_span.set_attribute("result", "no_items_detected")
+                return {'analysis_id': analysis_id, 'items': []}
 
-        # Step 4: 각 객체별 서브태스크 생성 (병렬 처리)
-        subtasks = []
-        for idx, item in enumerate(detected_items):
-            subtasks.append(
-                process_single_item.s(
+            # Step 3: Encode image for parallel processing
+            with _create_span("3_encode_image_base64") as span:
+                image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+
+            # Step 4: Create subtasks for parallel processing
+            with _create_span("4_dispatch_parallel_tasks") as span:
+                subtasks = []
+                for idx, item in enumerate(detected_items):
+                    subtasks.append(
+                        process_single_item.s(
+                            analysis_id=analysis_id,
+                            image_b64=image_b64,
+                            detected_item_dict={
+                                'category': item.category,
+                                'bbox': {
+                                    'x_min': item.bbox.x_min,
+                                    'y_min': item.bbox.y_min,
+                                    'x_max': item.bbox.x_max,
+                                    'y_max': item.bbox.y_max,
+                                },
+                                'confidence': item.confidence,
+                            },
+                            item_index=idx,
+                        )
+                    )
+
+                callback = analysis_complete_callback.s(
                     analysis_id=analysis_id,
-                    image_b64=image_b64,
-                    detected_item_dict={
-                        'category': item.category,
-                        'bbox': {
-                            'x_min': item.bbox.x_min,
-                            'y_min': item.bbox.y_min,
-                            'x_max': item.bbox.x_max,
-                            'y_max': item.bbox.y_max,
-                        },
-                        'confidence': item.confidence,
-                    },
-                    item_index=idx,
+                    user_id=user_id,
+                    total_items=len(detected_items),
                 )
-            )
 
-        # Step 5: Celery chord로 병렬 실행 후 결과 수집
-        # chord: 모든 서브태스크 완료 후 콜백 실행
-        callback = analysis_complete_callback.s(
-            analysis_id=analysis_id,
-            user_id=user_id,
-            total_items=len(detected_items),
-        )
+                job = chord(subtasks)(callback)
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("tasks.count", len(subtasks))
 
-        job = chord(subtasks)(callback)
-        logger.info(f"Analysis {analysis_id}: dispatched {len(subtasks)} parallel tasks")
+            logger.info(f"Analysis {analysis_id}: dispatched {len(subtasks)} parallel tasks")
 
-        return {'analysis_id': analysis_id, 'status': 'PROCESSING', 'task_count': len(subtasks)}
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("status", "PROCESSING")
+                main_span.set_attribute("parallel_tasks", len(subtasks))
 
-    except Exception as e:
-        logger.error(f"Analysis {analysis_id} failed: {e}")
-        redis_service.update_analysis_failed(analysis_id, str(e))
-        _update_analysis_status_db(analysis_id, 'FAILED')
-        raise self.retry(exc=e)
+            return {'analysis_id': analysis_id, 'status': 'PROCESSING', 'task_count': len(subtasks)}
+
+        except Exception as e:
+            logger.error(f"Analysis {analysis_id} failed: {e}")
+            redis_service.update_analysis_failed(analysis_id, str(e))
+            _update_analysis_status_db(analysis_id, 'FAILED')
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("error", str(e))
+            raise self.retry(exc=e)
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
@@ -216,39 +253,50 @@ def process_single_item(
     Returns:
         Processed item result
     """
-    redis_service = get_redis_service()
+    with _create_span(f"process_single_item_{item_index}") as main_span:
+        if main_span and hasattr(main_span, 'set_attribute'):
+            main_span.set_attribute("analysis.id", analysis_id)
+            main_span.set_attribute("item.index", item_index)
+            main_span.set_attribute("item.category", detected_item_dict.get('category', 'unknown'))
 
-    try:
-        # Base64 디코딩
-        image_bytes = base64.b64decode(image_b64)
+        redis_service = get_redis_service()
 
-        # DetectedItem 복원
-        detected_item = DetectedItem(
-            category=detected_item_dict['category'],
-            bbox=type('BBox', (), detected_item_dict['bbox'])(),
-            confidence=detected_item_dict['confidence'],
-        )
+        try:
+            # Base64 디코딩
+            image_bytes = base64.b64decode(image_b64)
 
-        # 객체 처리 (크롭 → 임베딩 → 검색 → 리랭킹)
-        result = _process_detected_item(
-            analysis_id=analysis_id,
-            image_bytes=image_bytes,
-            detected_item=detected_item,
-            item_index=item_index,
-        )
+            # DetectedItem 복원
+            detected_item = DetectedItem(
+                category=detected_item_dict['category'],
+                bbox=type('BBox', (), detected_item_dict['bbox'])(),
+                confidence=detected_item_dict['confidence'],
+            )
 
-        # 진행률 업데이트
-        # (Redis 임시 저장: 개별 아이템 처리 완료 카운트, 1시간 TTL)
-        completed_key = f"analysis:{analysis_id}:completed"
-        current = redis_service.get(completed_key) or "0"
-        redis_service.set(completed_key, str(int(current) + 1), ttl=3600)
+            # 객체 처리 (크롭 → 임베딩 → 검색 → 리랭킹)
+            result = _process_detected_item(
+                analysis_id=analysis_id,
+                image_bytes=image_bytes,
+                detected_item=detected_item,
+                item_index=item_index,
+            )
 
-        logger.info(f"Analysis {analysis_id} item {item_index} processed")
-        return result
+            # 진행률 업데이트
+            completed_key = f"analysis:{analysis_id}:completed"
+            current = redis_service.get(completed_key) or "0"
+            redis_service.set(completed_key, str(int(current) + 1), ttl=3600)
 
-    except Exception as e:
-        logger.error(f"Failed to process item {item_index} for analysis {analysis_id}: {e}")
-        raise self.retry(exc=e)
+            logger.info(f"Analysis {analysis_id} item {item_index} processed")
+
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("result.matches", len(result.get('matches', [])) if result else 0)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to process item {item_index} for analysis {analysis_id}: {e}")
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("error", str(e))
+            raise self.retry(exc=e)
 
 
 @shared_task
@@ -271,76 +319,86 @@ def analysis_complete_callback(
     Returns:
         Final analysis result
     """
-    from contextlib import nullcontext
+    with _create_span("analysis_complete_callback") as main_span:
+        if main_span and hasattr(main_span, 'set_attribute'):
+            main_span.set_attribute("analysis.id", analysis_id)
+            main_span.set_attribute("total_items", total_items)
 
-    def create_span(name):
-        if tracer:
-            return tracer.start_as_current_span(name)
-        return nullcontext()
+        redis_service = get_redis_service()
 
-    redis_service = get_redis_service()
+        try:
+            # None 결과 필터링
+            valid_results = [r for r in results if r is not None]
 
-    try:
-        # None 결과 필터링
-        valid_results = [r for r in results if r is not None]
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("valid_results", len(valid_results))
 
-        # DB에 결과 저장 (with tracing)
-        with create_span("7_save_results_to_db") as span:
-            if span and hasattr(span, 'set_attribute'):
-                span.set_attribute("analysis_id", analysis_id)
-                span.set_attribute("valid_results_count", len(valid_results))
-                span.set_attribute("total_items", total_items)
-                span.set_attribute("service", "mysql")
+            # DB에 결과 저장
+            with _create_span("7_save_results_to_db") as span:
+                if span and hasattr(span, 'set_attribute'):
+                    span.set_attribute("service", "mysql")
+                    span.set_attribute("records_count", len(valid_results))
 
-            redis_service.set_analysis_progress(analysis_id, 90)
-            with ANALYSIS_DURATION.labels(stage='save_results').time():
-                _save_analysis_results(analysis_id, valid_results, user_id)
+                redis_service.set_analysis_progress(analysis_id, 90)
+                with ANALYSIS_DURATION.labels(stage='save_results').time():
+                    _save_analysis_results(analysis_id, valid_results, user_id)
 
-        # 완료 상태 업데이트
-        redis_service.update_analysis_done(analysis_id, {'items': valid_results})
-        _update_analysis_status_db(analysis_id, 'DONE')
+            # 완료 상태 업데이트
+            with _create_span("8_update_status") as span:
+                redis_service.update_analysis_done(analysis_id, {'items': valid_results})
+                _update_analysis_status_db(analysis_id, 'DONE')
 
-        # Metrics: 분석 완료
-        ANALYSIS_TOTAL.labels(status='success').inc()
-        ANALYSES_COMPLETED_TOTAL.inc()
-        ANALYSIS_IN_PROGRESS.dec()
+            # Metrics: 분석 완료
+            ANALYSIS_TOTAL.labels(status='success').inc()
+            ANALYSES_COMPLETED_TOTAL.inc()
+            ANALYSIS_IN_PROGRESS.dec()
 
-        # Metrics: 매칭된 상품 수
-        for result in valid_results:
-            category = result.get('category', 'unknown')
-            match_count = len(result.get('matches', []))
-            for _ in range(match_count):
-                PRODUCT_MATCHES_TOTAL.labels(category=category).inc()
+            # Metrics: 매칭된 상품 수
+            total_matches = 0
+            for result in valid_results:
+                category = result.get('category', 'unknown')
+                match_count = len(result.get('matches', []))
+                total_matches += match_count
+                for _ in range(match_count):
+                    PRODUCT_MATCHES_TOTAL.labels(category=category).inc()
 
-        logger.info(f"Analysis {analysis_id} completed: {len(valid_results)}/{total_items} items processed")
+            logger.info(f"Analysis {analysis_id} completed: {len(valid_results)}/{total_items} items processed")
 
-        # Celery 워커 메트릭을 Pushgateway로 푸시
-        push_metrics()
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("status", "DONE")
+                main_span.set_attribute("total_matches", total_matches)
 
-        return {
-            'analysis_id': analysis_id,
-            'status': 'DONE',
-            'processed_items': len(valid_results),
-            'total_items': total_items,
-        }
+            # Celery 워커 메트릭을 Pushgateway로 푸시
+            push_metrics()
 
-    except Exception as e:
-        logger.error(f"Failed to complete analysis {analysis_id}: {e}")
-        redis_service.update_analysis_failed(analysis_id, str(e))
-        _update_analysis_status_db(analysis_id, 'FAILED')
+            return {
+                'analysis_id': analysis_id,
+                'status': 'DONE',
+                'processed_items': len(valid_results),
+                'total_items': total_items,
+            }
 
-        # Metrics: 분석 실패
-        ANALYSIS_TOTAL.labels(status='failed').inc()
-        ANALYSIS_IN_PROGRESS.dec()
+        except Exception as e:
+            logger.error(f"Failed to complete analysis {analysis_id}: {e}")
+            redis_service.update_analysis_failed(analysis_id, str(e))
+            _update_analysis_status_db(analysis_id, 'FAILED')
 
-        # 실패 시에도 메트릭 푸시
-        push_metrics()
+            if main_span and hasattr(main_span, 'set_attribute'):
+                main_span.set_attribute("status", "FAILED")
+                main_span.set_attribute("error", str(e))
 
-        return {
-            'analysis_id': analysis_id,
-            'status': 'FAILED',
-            'error': str(e),
-        }
+            # Metrics: 분석 실패
+            ANALYSIS_TOTAL.labels(status='failed').inc()
+            ANALYSIS_IN_PROGRESS.dec()
+
+            # 실패 시에도 메트릭 푸시
+            push_metrics()
+
+            return {
+                'analysis_id': analysis_id,
+                'status': 'FAILED',
+                'error': str(e),
+            }
 
 
 @shared_task
@@ -433,20 +491,8 @@ def _download_image(image_url: str) -> bytes:
 
 def _detect_objects(image_bytes: bytes) -> list[DetectedItem]:
     """Detect fashion items in image using Google Vision API."""
-    # Create span for object detection
-    if tracer:
-        with tracer.start_as_current_span("0_detect_objects_google_vision") as span:
-            span.set_attribute("service", "google_vision_api")
-            span.set_attribute("purpose", "fashion_item_detection")
-            vision_service = get_vision_service()
-            items = vision_service.detect_objects_from_bytes(image_bytes)
-            span.set_attribute("detected_count", len(items))
-            if items:
-                span.set_attribute("categories", ",".join(set(i.category for i in items)))
-            return items
-    else:
-        vision_service = get_vision_service()
-        return vision_service.detect_objects_from_bytes(image_bytes)
+    vision_service = get_vision_service()
+    return vision_service.detect_objects_from_bytes(image_bytes)
 
 
 def _process_detected_item(
@@ -473,23 +519,16 @@ def _process_detected_item(
     Returns:
         Processed item result
     """
-    # Helper for creating spans (handles case when tracer is None)
-    def create_span(name):
-        if tracer:
-            return tracer.start_as_current_span(name)
-        from contextlib import nullcontext
-        return nullcontext()
-
     try:
         # Step 1: Crop image and get pixel bbox
-        with create_span("1_crop_image") as span:
+        with _create_span("1_crop_image") as span:
             if span and hasattr(span, 'set_attribute'):
                 span.set_attribute("item.index", item_index)
                 span.set_attribute("item.category", detected_item.category)
             cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
 
         # Step 2: Upload cropped image to GCS
-        with create_span("2_upload_to_gcs") as span:
+        with _create_span("2_upload_to_gcs") as span:
             if span and hasattr(span, 'set_attribute'):
                 span.set_attribute("service", "google_cloud_storage")
                 span.set_attribute("analysis_id", analysis_id)
@@ -503,7 +542,7 @@ def _process_detected_item(
         # Step 3: Extract attributes with Claude Vision
         from services.gpt4v_service import get_gpt4v_service
         attributes = None
-        with create_span("3_extract_attributes_claude") as span:
+        with _create_span("3_extract_attributes_claude") as span:
             if span and hasattr(span, 'set_attribute'):
                 span.set_attribute("service", "anthropic_claude")
                 span.set_attribute("purpose", "color_brand_style_extraction")
@@ -525,7 +564,7 @@ def _process_detected_item(
                 attributes = None
 
         # Step 4: Generate embedding with FashionCLIP
-        with create_span("4_generate_embedding_fashionclip") as span:
+        with _create_span("4_generate_embedding_fashionclip") as span:
             if span and hasattr(span, 'set_attribute'):
                 span.set_attribute("service", "marqo_fashionclip")
                 span.set_attribute("embedding_dim", 512)
@@ -546,7 +585,7 @@ def _process_detected_item(
         detected_secondary = attributes.secondary_color if attributes else None
         detected_item_type = attributes.item_type if attributes else None
 
-        with create_span("5_search_opensearch_knn") as span:
+        with _create_span("5_search_opensearch_knn") as span:
             if span and hasattr(span, 'set_attribute'):
                 span.set_attribute("service", "opensearch")
                 span.set_attribute("search.category", search_category)
@@ -574,7 +613,7 @@ def _process_detected_item(
             return None
 
         # Step 6: Claude reranking for better accuracy
-        with create_span("6_rerank_claude") as span:
+        with _create_span("6_rerank_claude") as span:
             if span and hasattr(span, 'set_attribute'):
                 span.set_attribute("service", "anthropic_claude")
                 span.set_attribute("purpose", "visual_reranking")
