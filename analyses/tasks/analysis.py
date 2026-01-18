@@ -775,13 +775,11 @@ def _save_analysis_results(
                 if pid:
                     all_product_ids.add(str(pid))
 
-        # 3단계: 기존 Product 일괄 조회
+        # 3단계: 기존 Product 일괄 조회 (URL 직접 매칭으로 인덱스 활용)
         existing_products = {}
         if all_product_ids:
-            for product in Product.objects.filter(
-                product_url__iregex=r'/(' + '|'.join(all_product_ids) + ')$'
-            ):
-                # URL에서 product_id 추출
+            product_urls = [f"https://www.musinsa.com/app/goods/{pid}" for pid in all_product_ids]
+            for product in Product.objects.filter(product_url__in=product_urls):
                 pid = product.product_url.rstrip('/').split('/')[-1]
                 existing_products[pid] = product
 
@@ -809,9 +807,8 @@ def _save_analysis_results(
             logger.info(f"Bulk created {len(created_products)} new Products")
 
             # 새로 생성된 Product 다시 조회하여 매핑에 추가
-            for product in Product.objects.filter(
-                product_url__iregex=r'/(' + '|'.join(new_product_ids) + ')$'
-            ):
+            new_product_urls = [f"https://www.musinsa.com/app/goods/{pid}" for pid in new_product_ids]
+            for product in Product.objects.filter(product_url__in=new_product_urls):
                 pid = product.product_url.rstrip('/').split('/')[-1]
                 existing_products[pid] = product
 
