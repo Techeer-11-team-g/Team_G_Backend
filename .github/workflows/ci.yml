@@ -34,7 +34,7 @@ jobs:
 
       - name: Set PR Number
         run: |
-          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state closed --json number,mergeCommit --jq ".[] | select(.mergeCommit.oid == \\"${{ github.sha }}\\") | .number")
+          PR_NUMBER="0"
           echo "PR_NUMBER=${PR_NUMBER}"
           echo "PR_NUMBER"="${PR_NUMBER}" >> $GITHUB_OUTPUT
         env:
@@ -44,7 +44,7 @@ jobs:
       - name: Set Docker Image Tag
         id: get_pr_number
         run: |
-          PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state closed --json number,mergeCommit --jq ".[] | select(.mergeCommit.oid == \\"${{ github.sha }}\\") | .number")
+          PR_NUMBER="0"
           DOCKER_IMAGE_TAG="test-v1"          
           echo "DOCKER_IMAGE_TAG=${DOCKER_IMAGE_TAG}"
           echo "DOCKER_IMAGE_TAG"="${DOCKER_IMAGE_TAG}" >> $GITHUB_OUTPUT
@@ -71,3 +71,9 @@ jobs:
 
 #  DOCKER_IMAGE_TAG="test=v1"  # <----  # DOCKER_IMAGE_TAG="1.0.$PR_NUMBER" 원래는 이렇게 해야 하지만, 여기도 테스트해보려고 잠시 이렇게 바꾼겁니다! 나중에 main에 올릴 때는 다시 바꿔
 #  48번!
+
+
+# PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state closed --json number,mergeCommit --jq ".[] | select(.mergeCommit.oid == \\"${{ github.sha }}\\") | .number")
+# 위의 코드는 37번입니다. 테스트를 위해서 PR_NUMBER="0" 이렇게 아무 숫자로 넣었으니 나중에 수정!
+#PR_NUMBER=$(gh pr list --repo ${{ github.repository }} --state closed --json number,mergeCommit --jq ".[] | select(.mergeCommit.oid == \\"${{ github.sha }}\\") | .number")
+# 위 코드는 47번입니다. 이것도 위의 이유와 동치임.  PR_NUMBER="0"
