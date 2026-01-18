@@ -1,30 +1,29 @@
 import logging
-from contextlib import nullcontext
 
 from rest_framework import viewsets, status, permissions, mixins
 from rest_framework.response import Response
 from rest_framework.pagination import CursorPagination
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse
-from django.contrib.auth import get_user_model
+
 from .models import Order, CartItem
-from .serializers import ( 
+from .serializers import (
     OrderCreateSerializer, OrderSerializer, OrderListSerializer,
     OrderDetailSerializer, OrderCancelSerializer,
     CartItemSerializer, CartItemCreateSerializer
 )
-from . import services
 from services.metrics import ORDERS_CREATED_TOTAL, CART_ITEMS_TOTAL
+from analyses.utils import create_span
 
 logger = logging.getLogger(__name__)
 
-def _get_tracer():
-    from opentelemetry import trace
-    return trace.get_tracer(__name__)
+# 트레이서 모듈명
+TRACER_NAME = "orders.views"
 
-def _create_span(span_name, attributes=None):
-    from analyses.utils import create_span 
-    return create_span("orders.views", span_name)
+
+def _create_span(span_name):
+    """트레이싱 span 생성 - analyses.utils.TracingContext 사용."""
+    return create_span(TRACER_NAME, span_name)
 
 class OrderCursorPagination(CursorPagination):
     ordering = '-created_at'
