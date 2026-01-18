@@ -338,20 +338,62 @@ def _process_detected_item(
     """
     단일 검출 객체 처리 파이프라인.
 
-    분리된 헬퍼 함수들을 순차적으로 호출합니다.
+    병렬 실행으로 최적화:
+    - GCS 업로드: 백그라운드 실행
+    - Claude 속성추출 + 임베딩 생성: 병렬 실행
     """
+    from concurrent.futures import ThreadPoolExecutor
+    from opentelemetry import context as otel_context
+
     try:
-        # 1. 이미지 크롭 + GCS 업로드
-        cropped_bytes, pixel_bbox, cropped_image_url = _crop_and_upload(
-            analysis_id, image_bytes, detected_item, item_index
-        )
+        # 1. 이미지 크롭 (동기)
+        with create_span(TRACER_NAME, "1_crop_image") as span:
+            span.set("item.index", item_index)
+            span.set("item.category", detected_item.category)
+            cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
 
-        # 2. 속성 추출 (Claude Vision)
-        attributes = _extract_attributes(cropped_bytes, detected_item.category)
+        # 현재 트레이스 컨텍스트 캡처 (스레드 전파용)
+        current_context = otel_context.get_current()
 
-        # 3. 임베딩 생성 + 검색
-        search_results = _embed_and_search(
-            cropped_bytes, detected_item.category, attributes
+        def run_with_context(func, *args, **kwargs):
+            """트레이스 컨텍스트를 유지하며 함수 실행."""
+            token = otel_context.attach(current_context)
+            try:
+                return func(*args, **kwargs)
+            finally:
+                otel_context.detach(token)
+
+        # 2. 병렬 실행: GCS 업로드 + Claude 속성추출 + 임베딩 생성
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            # GCS 업로드 (백그라운드)
+            gcs_future = executor.submit(
+                run_with_context,
+                _upload_to_gcs_with_span,
+                image_bytes=cropped_bytes,
+                analysis_id=analysis_id,
+                item_index=item_index,
+                category=detected_item.category,
+            )
+
+            # Claude 속성추출
+            attr_future = executor.submit(
+                run_with_context,
+                _extract_attributes, cropped_bytes, detected_item.category
+            )
+
+            # 임베딩 생성
+            embed_future = executor.submit(
+                run_with_context,
+                _generate_embedding, cropped_bytes
+            )
+
+            # 임베딩과 속성 완료 대기 (GCS는 기다리지 않음)
+            attributes = attr_future.result()
+            embedding = embed_future.result()
+
+        # 3. 검색 (임베딩 + 속성 필요)
+        search_results = _search_opensearch(
+            embedding, detected_item.category, attributes
         )
 
         if not search_results:
@@ -361,7 +403,10 @@ def _process_detected_item(
         # 4. 리랭킹 (Claude)
         ranked_results = _rerank_results(cropped_bytes, search_results)
 
-        # 5. 결과 포맷팅
+        # 5. GCS URL 가져오기 (이 시점에는 이미 완료됨)
+        cropped_image_url = gcs_future.result()
+
+        # 6. 결과 포맷팅
         return _format_item_result(
             item_index, detected_item, pixel_bbox,
             cropped_image_url, ranked_results, attributes
@@ -372,28 +417,21 @@ def _process_detected_item(
         return None
 
 
-def _crop_and_upload(
-    analysis_id: str,
+def _upload_to_gcs_with_span(
     image_bytes: bytes,
-    detected_item: DetectedItem,
+    analysis_id: str,
     item_index: int,
-) -> tuple[bytes, dict, Optional[str]]:
-    """이미지 크롭 및 GCS 업로드."""
-    with create_span(TRACER_NAME, "1_crop_image") as span:
-        span.set("item.index", item_index)
-        span.set("item.category", detected_item.category)
-        cropped_bytes, pixel_bbox = _crop_image(image_bytes, detected_item)
-
+    category: str,
+) -> Optional[str]:
+    """GCS 업로드 (트레이싱 포함, 병렬 실행용)."""
     with create_span(TRACER_NAME, "2_upload_to_gcs") as span:
         span.set("service", "google_cloud_storage")
-        cropped_image_url = _upload_to_gcs(
-            image_bytes=cropped_bytes,
+        return _upload_to_gcs(
+            image_bytes=image_bytes,
             analysis_id=analysis_id,
             item_index=item_index,
-            category=detected_item.category,
+            category=category,
         )
-
-    return cropped_bytes, pixel_bbox, cropped_image_url
 
 
 def _extract_attributes(cropped_bytes: bytes, category: str) -> Optional[object]:
@@ -420,20 +458,23 @@ def _extract_attributes(cropped_bytes: bytes, category: str) -> Optional[object]
             return None
 
 
-def _embed_and_search(
-    cropped_bytes: bytes,
-    category: str,
-    attributes: Optional[object],
-) -> list[dict]:
-    """FashionCLIP 임베딩 생성 + OpenSearch 검색."""
-    # 임베딩 생성
-    with create_span(TRACER_NAME, "4_generate_embedding_fashionclip") as span:
+def _generate_embedding(cropped_bytes: bytes) -> list[float]:
+    """FashionCLIP 임베딩 생성 (병렬 실행용)."""
+    with create_span(TRACER_NAME, "3_generate_embedding_fashionclip") as span:
         span.set("service", "marqo_fashionclip")
         span.set("embedding_dim", 512)
         embedding_service = get_embedding_service()
         with ANALYSIS_DURATION.labels(stage='generate_embedding').time():
             embedding = embedding_service.get_image_embedding(cropped_bytes)
+        return embedding
 
+
+def _search_opensearch(
+    embedding: list[float],
+    category: str,
+    attributes: Optional[object],
+) -> list[dict]:
+    """OpenSearch k-NN 검색."""
     # 카테고리 정규화 및 속성 추출
     search_category = normalize_category(category)
     detected_brand = attributes.brand if attributes else None
@@ -442,7 +483,7 @@ def _embed_and_search(
     detected_item_type = attributes.item_type if attributes else None
 
     # OpenSearch 검색
-    with create_span(TRACER_NAME, "5_search_opensearch_knn") as span:
+    with create_span(TRACER_NAME, "4_search_opensearch_knn") as span:
         span.set("service", "opensearch")
         span.set("search.category", search_category)
         span.set("search.brand", detected_brand or "none")
@@ -473,7 +514,7 @@ def _rerank_results(cropped_bytes: bytes, search_results: list[dict]) -> list[di
     """Claude로 리랭킹."""
     from services.gpt4v_service import get_gpt4v_service
 
-    with create_span(TRACER_NAME, "6_rerank_claude") as span:
+    with create_span(TRACER_NAME, "5_rerank_claude") as span:
         span.set("service", "anthropic_claude")
         span.set("purpose", "visual_reranking")
         span.set("candidates_count", min(SearchConfig.RERANK_TOP_K, len(search_results)))
@@ -691,34 +732,106 @@ def _save_analysis_results(
     results: list[dict],
     user_id: Optional[int],
 ):
-    """Save analysis results to MySQL."""
+    """Save analysis results to MySQL using bulk operations."""
     from analyses.models import ImageAnalysis, DetectedObject, ObjectProductMapping
+    from products.models import Product
 
     try:
         analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
         uploaded_image = analysis.uploaded_image
 
-        for result in results:
-            # 1. bbox 정규화
-            normalized_bbox = _normalize_result_bbox(result.get('bbox', {}))
+        # 1단계: 모든 DetectedObject 데이터 준비 및 bulk_create
+        # MySQL에서 bulk_create 후 ID를 얻기 위해 최대 ID 기반 조회 사용
+        max_id_before = DetectedObject.objects.filter(
+            uploaded_image=uploaded_image
+        ).order_by('-id').values_list('id', flat=True).first() or 0
 
-            # 2. DetectedObject 생성
-            detected_object = DetectedObject.objects.create(
+        detected_objects_data = []
+        for result in results:
+            normalized_bbox = _normalize_result_bbox(result.get('bbox', {}))
+            detected_objects_data.append(DetectedObject(
                 uploaded_image=uploaded_image,
                 object_category=result.get('category', 'unknown'),
                 bbox_x1=normalized_bbox['x1'],
                 bbox_y1=normalized_bbox['y1'],
                 bbox_x2=normalized_bbox['x2'],
                 bbox_y2=normalized_bbox['y2'],
-            )
+            ))
 
-            logger.info(f"Created DetectedObject {detected_object.id} - {result.get('category')}")
+        DetectedObject.objects.bulk_create(detected_objects_data)
 
-            # 3. 상품 매핑 생성
-            mapping_count = _create_product_mappings(
-                detected_object, result.get('matches', []), result.get('category', 'unknown')
+        # bulk_create 후 ID를 가져오기 위해 다시 조회 (max_id 기반)
+        created_objects = list(DetectedObject.objects.filter(
+            uploaded_image=uploaded_image,
+            id__gt=max_id_before
+        ).order_by('id'))
+        logger.info(f"Bulk created {len(created_objects)} DetectedObjects")
+
+        # 2단계: 모든 product_id 수집
+        all_product_ids = set()
+        for result in results:
+            for match in result.get('matches', []):
+                pid = match.get('product_id')
+                if pid:
+                    all_product_ids.add(str(pid))
+
+        # 3단계: 기존 Product 일괄 조회
+        existing_products = {}
+        if all_product_ids:
+            for product in Product.objects.filter(
+                product_url__iregex=r'/(' + '|'.join(all_product_ids) + ')$'
+            ):
+                # URL에서 product_id 추출
+                pid = product.product_url.rstrip('/').split('/')[-1]
+                existing_products[pid] = product
+
+        # 4단계: 없는 Product 일괄 생성
+        new_products_data = []
+        new_product_ids = set()
+        for result in results:
+            for match in result.get('matches', []):
+                pid = str(match.get('product_id', ''))
+                if pid and pid not in existing_products and pid not in new_product_ids:
+                    new_products_data.append(Product(
+                        product_url=f"https://www.musinsa.com/app/goods/{pid}",
+                        brand_name=match.get('brand', 'Unknown') or 'Unknown',
+                        product_name=match.get('name', 'Unknown') or 'Unknown',
+                        category=result.get('category', 'unknown'),
+                        selling_price=int(match.get('price', 0) or 0),
+                        product_image_url=match.get('image_url', '') or '',
+                    ))
+                    new_product_ids.add(pid)
+
+        if new_products_data:
+            created_products = Product.objects.bulk_create(
+                new_products_data, ignore_conflicts=True
             )
-            logger.info(f"Created {mapping_count} mappings for object {detected_object.id}")
+            logger.info(f"Bulk created {len(created_products)} new Products")
+
+            # 새로 생성된 Product 다시 조회하여 매핑에 추가
+            for product in Product.objects.filter(
+                product_url__iregex=r'/(' + '|'.join(new_product_ids) + ')$'
+            ):
+                pid = product.product_url.rstrip('/').split('/')[-1]
+                existing_products[pid] = product
+
+        # 5단계: ObjectProductMapping 일괄 생성
+        # results와 created_objects는 동일 순서로 생성되었으므로 zip 사용
+        mappings_data = []
+        for obj, result in zip(created_objects, results):
+            for match in result.get('matches', []):
+                pid = str(match.get('product_id', ''))
+                product = existing_products.get(pid)
+                if product:
+                    mappings_data.append(ObjectProductMapping(
+                        detected_object=obj,
+                        product=product,
+                        confidence_score=match.get('score', 0.0),
+                    ))
+
+        if mappings_data:
+            ObjectProductMapping.objects.bulk_create(mappings_data)
+            logger.info(f"Bulk created {len(mappings_data)} ObjectProductMappings")
 
         # 상태 업데이트
         analysis.image_analysis_status = ImageAnalysis.Status.DONE
@@ -730,6 +843,7 @@ def _save_analysis_results(
         logger.error(f"ImageAnalysis {analysis_id} not found")
     except Exception as e:
         logger.error(f"Failed to save analysis results: {e}")
+        raise
 
 
 def _normalize_result_bbox(bbox: dict) -> dict:
@@ -743,36 +857,3 @@ def _normalize_result_bbox(bbox: dict) -> dict:
         'x2': bbox.get('x_max', 0) / img_width if img_width > 0 else 0,
         'y2': bbox.get('y_max', 0) / img_height if img_height > 0 else 0,
     }
-
-
-def _create_product_mappings(
-    detected_object,
-    matches: list[dict],
-    default_category: str,
-) -> int:
-    """상품 매핑 생성 (Product 자동 생성 포함)."""
-    from analyses.models import ObjectProductMapping
-
-    mapping_count = 0
-    for match in matches:
-        product_id = match.get('product_id')
-        if product_id:
-            try:
-                # 공통 유틸리티로 Product 조회/생성
-                product = get_or_create_product_from_search(
-                    product_id=str(product_id),
-                    search_result=match,
-                    default_category=default_category,
-                )
-
-                ObjectProductMapping.objects.create(
-                    detected_object=detected_object,
-                    product=product,
-                    confidence_score=match.get('score', 0.0),
-                )
-                mapping_count += 1
-
-            except Exception as e:
-                logger.warning(f"Error creating mapping for product {product_id}: {e}")
-
-    return mapping_count
