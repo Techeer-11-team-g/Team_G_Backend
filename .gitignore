@@ -81,8 +81,8 @@ import_products.py
 FASHIONCLIP_MIGRATION.md
 
 # Test files
-test_pipeline.py
-test_*.py
+# test_pipeline.py       # 84, 85 번 라인은 ci를 원활하게 시작할 수 있도록 주석 처리함.
+# test_*.py
 
 # Documentation (local only)
 docs/
