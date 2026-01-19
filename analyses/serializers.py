@@ -110,7 +110,33 @@ class BaseUploadedImageSerializer(serializers.ModelSerializer):
 
 # 기존 호환성을 위한 alias
 UploadedImageResponseSerializer = BaseUploadedImageSerializer
-UploadedImageListSerializer = BaseUploadedImageSerializer
+
+
+class UploadedImageListSerializer(BaseUploadedImageSerializer):
+    """
+    업로드 이미지 목록 조회용 Serializer.
+    analysis_id를 포함하여 에이전트 채팅 기능 지원.
+    """
+    analysis_id = serializers.SerializerMethodField()
+
+    class Meta(BaseUploadedImageSerializer.Meta):
+        fields = BaseUploadedImageSerializer.Meta.fields + ['analysis_id']
+
+    def get_analysis_id(self, obj):
+        """해당 이미지의 최신 분석 ID 반환."""
+        # prefetch된 analyses 사용
+        analyses = getattr(obj, '_prefetched_objects_cache', {}).get('analyses')
+        if analyses is not None:
+            valid_analyses = [a for a in analyses if not a.is_deleted]
+            if valid_analyses:
+                # 최신 분석 반환
+                return max(valid_analyses, key=lambda a: a.created_at).id
+        else:
+            # prefetch 안 된 경우 쿼리 실행
+            latest = obj.analyses.filter(is_deleted=False).order_by('-created_at').first()
+            if latest:
+                return latest.id
+        return None
 
 
 # =============================================================================

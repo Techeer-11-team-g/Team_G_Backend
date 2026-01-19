@@ -262,7 +262,7 @@ class UploadedImageView(APIView):
         queryset = UploadedImage.objects.filter(
             user=request.user,
             is_deleted=False
-        )
+        ).prefetch_related('analyses')  # N+1 방지: analysis_id 조회용
 
         if cursor:
             queryset = queryset.filter(id__lt=cursor)
@@ -338,36 +338,62 @@ class ImageAnalysisView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # 4. LangChain 쿼리 파싱
+        # 4. LangChain 쿼리 파싱 (v2: 다중 요청 + 대화 히스토리 지원)
         available_categories = list(
             detected_objects.values_list('object_category', flat=True).distinct()
         )
-        parsed_query = self._parse_query(query, available_categories)
+        parsed_result = self._parse_query(query, available_categories, analysis_id)
 
-        # 5. 대상 카테고리 필터링
-        target_objects = self._filter_by_categories(
-            detected_objects, parsed_query.get('target_categories', [])
-        )
-        target_object_ids = list(target_objects.values_list('id', flat=True))
+        # v2 다중 요청 처리
+        understood_intent = None
+        clarification_needed = False
+        clarification_question = None
+
+        if 'requests' in parsed_result:
+            # v2 응답: 다중 요청
+            requests_list = parsed_result.get('requests', [])
+            understood_intent = parsed_result.get('understood_intent')
+            clarification_needed = parsed_result.get('clarification_needed', False)
+            clarification_question = parsed_result.get('clarification_question')
+
+            # 확인이 필요한 경우 먼저 응답
+            if clarification_needed and clarification_question:
+                return Response({
+                    'clarification_needed': True,
+                    'clarification_question': clarification_question,
+                    'understood_intent': understood_intent,
+                }, status=status.HTTP_200_OK)
+        else:
+            # v1 응답: 단일 요청
+            requests_list = [parsed_result]
+
+        # 5. 각 요청별로 대상 객체 수집 (다중 요청 병렬 처리)
+        all_subtasks = []
+        refine_id = str(uuid.uuid4())
+
+        from opentelemetry.propagate import inject
+        refine_headers = {}
+        inject(refine_headers)
+
+        for req in requests_list:
+            # 해당 요청의 대상 카테고리 필터링
+            target_objects = self._filter_by_categories(
+                detected_objects, req.get('target_categories', [])
+            )
+
+            for obj_id in target_objects.values_list('id', flat=True):
+                all_subtasks.append(
+                    refine_single_object.s(
+                        refine_id=refine_id,
+                        detected_object_id=obj_id,
+                        parsed_query=req,  # 개별 요청의 필터 적용
+                    ).set(headers=refine_headers)
+                )
 
         # 6. Celery Group으로 병렬 처리
-        refine_id = str(uuid.uuid4())
         try:
-            from opentelemetry.propagate import inject
-            refine_headers = {}
-            inject(refine_headers)
-
-            subtasks = [
-                refine_single_object.s(
-                    refine_id=refine_id,
-                    detected_object_id=obj_id,
-                    parsed_query=parsed_query,
-                ).set(headers=refine_headers)
-                for obj_id in target_object_ids
-            ]
-
-            if subtasks:
-                job = group(subtasks)
+            if all_subtasks:
+                job = group(all_subtasks)
                 results = job.apply_async().get(timeout=300)
                 logger.info(
                     "자연어 재분석 완료",
@@ -376,7 +402,9 @@ class ImageAnalysisView(APIView):
                         'analysis_id': str(analysis_id),
                         'refine_id': refine_id,
                         'query': query,
+                        'requests_count': len(requests_list),
                         'objects_processed': len(results),
+                        'understood_intent': understood_intent,
                     }
                 )
 
@@ -387,10 +415,16 @@ class ImageAnalysisView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-        # 7. 최신 데이터로 응답 반환
+        # 7. 최신 데이터로 응답 반환 (understood_intent 포함)
         analysis.refresh_from_db()
         response_serializer = AnalysisRefineResponseSerializer(analysis)
-        return Response(response_serializer.data)
+        response_data = response_serializer.data
+
+        # 사용자 피드백용 의도 요약 추가
+        if understood_intent:
+            response_data['understood_intent'] = understood_intent
+
+        return Response(response_data)
 
     def _get_target_objects(self, analysis, detected_object_id):
         """대상 객체 조회."""
@@ -400,8 +434,15 @@ class ImageAnalysisView(APIView):
             )
         return analysis.uploaded_image.detected_objects.filter(is_deleted=False)
 
-    def _parse_query(self, query, available_categories):
-        """LangChain 쿼리 파싱."""
+    def _parse_query(self, query, available_categories, analysis_id=None):
+        """
+        LangChain 쿼리 파싱.
+
+        v2 기능:
+        - Function Calling으로 구조화된 파싱
+        - 다중 요청 지원
+        - 대화 히스토리 문맥 유지
+        """
         try:
             from opentelemetry.propagate import inject
             headers = {}
@@ -409,10 +450,17 @@ class ImageAnalysisView(APIView):
 
             parsed_query = parse_refine_query_task.apply_async(
                 args=[query, available_categories],
+                kwargs={'analysis_id': analysis_id},  # 대화 문맥용
                 headers=headers,
             ).get(timeout=30)
 
-            logger.info(f"Parsed refine query: {parsed_query}")
+            # v2 다중 요청 처리
+            if 'requests' in parsed_query:
+                logger.info(f"V2 parsed: {len(parsed_query['requests'])} requests")
+                logger.info(f"Understood: {parsed_query.get('understood_intent')}")
+            else:
+                logger.info(f"Parsed refine query: {parsed_query}")
+
             return parsed_query
 
         except Exception as e:
@@ -443,11 +491,8 @@ class ImageAnalysisView(APIView):
             f"found {target_objects.count()} objects"
         )
 
-        # 매칭되는 객체가 없으면 전체 대상
-        if not target_objects.exists():
-            logger.info(f"No objects matched categories, using all {detected_objects.count()} objects")
-            return detected_objects
-
+        # 명시적으로 카테고리를 지정했으면 해당 결과만 반환 (폴백 제거)
+        # 매칭되는 객체가 없으면 빈 결과 반환
         return target_objects
 
     @extend_schema(
