@@ -113,26 +113,23 @@ def save_analysis_results(
                 if pid:
                     all_product_ids.add(str(pid))
 
-        # 3단계: 기존 Product 일괄 조회 (두 가지 URL 형식 모두, 사이즈 있는 상품 우선)
-        # - 기존 데이터: https://www.musinsa.com/products/{pid} (사이즈 있음)
+        # 3단계: 기존 Product 일괄 조회 (두 가지 URL 형식 모두)
+        # - 기존 데이터: https://www.musinsa.com/products/{pid}
         # - 새 데이터: https://www.musinsa.com/app/goods/{pid}
         existing_products = {}
         if all_product_ids:
-            from django.db.models import Count, Q
             product_urls = []
             for pid in all_product_ids:
                 product_urls.append(f"https://www.musinsa.com/products/{pid}")
                 product_urls.append(f"https://www.musinsa.com/app/goods/{pid}")
-            # 사이즈 있는 상품 우선 선택
-            products_with_sizes = Product.objects.filter(
-                product_url__in=product_urls
-            ).annotate(
-                size_count=Count('size_codes', filter=Q(size_codes__is_deleted=False))
-            ).order_by('-size_count')
 
-            for product in products_with_sizes:
+            # product_url 인덱스를 활용한 빠른 조회
+            for product in Product.objects.filter(product_url__in=product_urls).only(
+                'id', 'product_url', 'brand_name', 'product_name',
+                'selling_price', 'product_image_url'
+            ):
                 pid = product.product_url.rstrip('/').split('/')[-1]
-                if pid not in existing_products:  # 먼저 등록된 상품 유지 (사이즈 있는 상품)
+                if pid not in existing_products:
                     existing_products[pid] = product
 
         # 4단계: 없는 Product 일괄 생성

@@ -76,9 +76,9 @@ Important:
 - For outer_length: only provide for outer items (jackets, coats, cardigans)"""
 
     def __init__(self):
-        """Initialize Claude Opus service."""
+        """Initialize Claude Vision service."""
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = "claude-opus-4-20250514"
+        self.model = "claude-sonnet-4-20250514"
         logger.info(f"Claude Vision service initialized (model: {self.model})")
 
     def extract_attributes(

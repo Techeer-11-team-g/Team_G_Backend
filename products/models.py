@@ -105,6 +105,7 @@ class Product(models.Model):
         db_table = 'product'
         verbose_name = '상품'
         verbose_name_plural = '상품 목록'
+        # idx_product_url: prefix index on product_url(255) - see migration 0002
 
     def __str__(self):
         return f"[{self.brand_name}] {self.product_name}"
