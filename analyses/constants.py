@@ -22,8 +22,10 @@ CATEGORY_ALIASES = {
     'top': ['top', '상의', '티셔츠', '셔츠'],
     'outer': ['outer', 'outerwear', '아우터', '자켓', '코트'],
     'outerwear': ['outer', 'outerwear', '아우터', '자켓', '코트'],
-    'shoes': ['shoes', '신발', '운동화', '스니커즈'],
-    'bag': ['bag', '가방'],
+    'shoes': ['shoes', '신발', '운동화', '스니커즈', '구두', '부츠', '샌들', '슬리퍼', '로퍼'],
+    'bag': ['bag', '가방', '백팩', '토트백', '크로스백'],
+    'dress': ['dress', '원피스', '드레스'],
+    'skirt': ['skirt', '치마', '스커트'],
 }
 
 # FashionCLIP 텍스트 임베딩용 카테고리 설명
@@ -31,8 +33,10 @@ CATEGORY_DESCRIPTIONS = {
     'top': 'top shirt',
     'pants': 'pants trousers',
     'outer': 'jacket coat outerwear',
-    'shoes': 'shoes sneakers',
-    'bag': 'bag',
+    'shoes': 'shoes sneakers boots heels',
+    'bag': 'bag backpack',
+    'dress': 'dress one-piece',
+    'skirt': 'skirt',
 }
 
 
