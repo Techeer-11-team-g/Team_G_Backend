@@ -17,10 +17,10 @@ Note:
 """
 
 import logging
-from contextlib import nullcontext
 
 from celery import shared_task
 
+from analyses.utils import create_span
 from services.fashn_service import get_fashn_service
 from services.metrics import (
     FITTING_DURATION,
@@ -32,52 +32,8 @@ from .models import FittingImage
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
-# OpenTelemetry 트레이싱 유틸리티
-# =============================================================================
-
-def _get_tracer():
-    """
-    OpenTelemetry Tracer를 지연 로딩합니다.
-    
-    Returns:
-        Tracer | None: TracerProvider가 초기화된 경우 Tracer, 아니면 None
-    """
-    try:
-        from opentelemetry import trace
-        return trace.get_tracer("fittings.tasks")
-    except ImportError:
-        return None
-
-
-def _create_span(name: str):
-    """
-    트레이싱 span을 생성합니다.
-    
-    Args:
-        name: span 이름
-        
-    Returns:
-        Span | nullcontext: Tracer가 있으면 Span, 없으면 nullcontext
-    """
-    tracer = _get_tracer()
-    if tracer:
-        return tracer.start_as_current_span(name)
-    return nullcontext()
-
-
-def _set_span_attr(span, key: str, value):
-    """
-    span에 attribute를 안전하게 설정합니다.
-    
-    Args:
-        span: OpenTelemetry Span 객체
-        key: attribute 키
-        value: attribute 값
-    """
-    if span and hasattr(span, 'set_attribute'):
-        span.set_attribute(key, value)
+# 트레이서 모듈명
+TRACER_NAME = "fittings.tasks"
 
 
 # =============================================================================
@@ -108,14 +64,14 @@ def process_fitting_task(self, fitting_id: int):
         - FITTINGS_REQUESTED_TOTAL: 피팅 요청 수 (success/failed/error)
         - FITTING_DURATION: 피팅 처리 시간 (카테고리별)
     """
-    with _create_span("process_fitting_task") as span:
-        _set_span_attr(span, "fitting.id", fitting_id)
+    with create_span(TRACER_NAME, "process_fitting_task") as span:
+        span.set("fitting.id", fitting_id)
 
         try:
             # ----------------------------------------------------------
             # Step 1: 피팅 데이터 로드 및 상태 변경
             # ----------------------------------------------------------
-            with _create_span("1_load_fitting_data"):
+            with create_span(TRACER_NAME, "1_load_fitting_data"):
                 fitting = FittingImage.objects.select_related(
                     'user_image', 'product'
                 ).get(id=fitting_id)
@@ -127,14 +83,14 @@ def process_fitting_task(self, fitting_id: int):
             # ----------------------------------------------------------
             # Step 2: 피팅 파라미터 준비
             # ----------------------------------------------------------
-            with _create_span("2_prepare_fitting") as prep_span:
+            with create_span(TRACER_NAME, "2_prepare_fitting") as prep_span:
                 service = get_fashn_service()
                 
                 # 상품 카테고리를 The New Black API 카테고리로 매핑
                 category = service.map_category(fitting.product.category)
                 
-                _set_span_attr(prep_span, "fitting.category", category)
-                _set_span_attr(prep_span, "fitting.product_id", fitting.product.id)
+                prep_span.set("fitting.category", category)
+                prep_span.set("fitting.product_id", fitting.product.id)
 
             logger.info(
                 f"피팅 처리 시작: id={fitting_id}, "
@@ -144,7 +100,7 @@ def process_fitting_task(self, fitting_id: int):
             # ----------------------------------------------------------
             # Step 3: The New Black API 호출
             # ----------------------------------------------------------
-            with _create_span("3_call_thenewblack_api") as api_span:
+            with create_span(TRACER_NAME, "3_call_thenewblack_api") as api_span:
                 # 메트릭 수집: API 호출 및 소요시간
                 with record_api_call('thenewblack'):
                     with FITTING_DURATION.labels(category=category).time():
@@ -154,12 +110,12 @@ def process_fitting_task(self, fitting_id: int):
                             category=category
                         )
                 
-                _set_span_attr(api_span, "api.status", result.status)
+                api_span.set("api.status", result.status)
 
             # ----------------------------------------------------------
             # Step 4: 결과 저장
             # ----------------------------------------------------------
-            with _create_span("4_save_fitting_result"):
+            with create_span(TRACER_NAME, "4_save_fitting_result"):
                 if result.status == 'completed' and result.output_url:
                     # 성공
                     fitting.fitting_image_status = FittingImage.Status.DONE
