@@ -49,30 +49,66 @@ def parse_refine_query_task(
     self,
     query: str,
     available_categories: list[str],
+    analysis_id: int = None,
+    use_v2: bool = False,  # 기본값 False로 변경 - 안정성 우선
 ):
     """
-    LangChain을 사용하여 자연어 쿼리를 파싱하는 Celery 태스크.
+    자연어 쿼리를 파싱하는 Celery 태스크.
 
-    외부 API 호출: OpenAI API (LangChain)
+    v2 (기본값):
+    - Function Calling으로 구조화된 출력 보장
+    - 다중 요청 파싱 지원
+    - 대화 히스토리 문맥 유지
 
     Args:
         query: 사용자 자연어 쿼리
         available_categories: 가용 카테고리 목록
+        analysis_id: 분석 ID (대화 문맥용)
+        use_v2: 향상된 파싱 사용 여부 (기본: True)
 
     Returns:
         파싱된 쿼리 정보 dict
+        v2: {'requests': [...], 'understood_intent': str, ...}
+        v1: {'action': str, 'target_categories': [...], ...}
     """
     from services.langchain_service import get_langchain_service
 
     try:
         langchain_service = get_langchain_service(temperature=0.3)
-        parsed_query = langchain_service.parse_refine_query(query, available_categories)
 
-        logger.info(f"LangChain parsed query: {parsed_query}")
-        return parsed_query
+        if use_v2:
+            # 대화 히스토리 로드
+            conversation_history = []
+            if analysis_id:
+                conversation_history = langchain_service.get_conversation_history(analysis_id)
+
+            # Function Calling 기반 파싱
+            parsed_result = langchain_service.parse_refine_query_v2(
+                query=query,
+                available_categories=available_categories,
+                conversation_history=conversation_history,
+                analysis_id=analysis_id,
+            )
+
+            logger.info(f"V2 parsed: {len(parsed_result.get('requests', []))} requests")
+            logger.info(f"Intent: {parsed_result.get('understood_intent')}")
+
+            # 하위 호환성: 단일 요청인 경우 기존 형식으로도 반환
+            if len(parsed_result.get('requests', [])) == 1:
+                single_req = parsed_result['requests'][0]
+                single_req['_v2_result'] = parsed_result  # 전체 결과 참조 저장
+                return single_req
+
+            return parsed_result
+
+        else:
+            # 레거시 파싱
+            parsed_query = langchain_service.parse_refine_query(query, available_categories)
+            logger.info(f"Legacy parsed query: {parsed_query}")
+            return parsed_query
 
     except Exception as e:
-        logger.error(f"Failed to parse query with LangChain: {e}")
+        logger.error(f"Failed to parse query: {e}")
         return _get_default_parsed_query(available_categories)
 
 
@@ -134,13 +170,30 @@ def refine_single_object(
 
     리팩토링: 325줄 → 메인 함수 + 7개 헬퍼 함수로 분리
     """
-    from analyses.models import DetectedObject
+    from analyses.models import DetectedObject, ObjectProductMapping
 
     redis_service = get_redis_service()
 
     try:
         # 1. DetectedObject 조회
         detected_obj = DetectedObject.objects.get(id=detected_object_id, is_deleted=False)
+
+        # 1-1. 기존 매핑된 상품 ID 조회 (재검색 시 제외용)
+        existing_product_ids = set(
+            ObjectProductMapping.objects.filter(
+                detected_object=detected_obj,
+                is_deleted=False
+            ).values_list('product__product_url', flat=True)
+        )
+        # URL에서 product_id 추출 (예: https://www.musinsa.com/products/12345 → 12345)
+        exclude_product_ids = set()
+        for url in existing_product_ids:
+            if url:
+                pid = url.rstrip('/').split('/')[-1]
+                exclude_product_ids.add(pid)
+
+        if exclude_product_ids:
+            logger.info(f"Excluding {len(exclude_product_ids)} existing products: {exclude_product_ids}")
 
         # 2. 임베딩 생성 (이미지 + 텍스트)
         image_embedding = _generate_image_embedding(detected_obj)
@@ -151,6 +204,15 @@ def refine_single_object(
 
         # 4. 검색 실행
         search_results = _execute_search(embedding, detected_obj.object_category)
+
+        # 4-1. 기존 매핑 상품 제외
+        if exclude_product_ids:
+            before_count = len(search_results)
+            search_results = [
+                r for r in search_results
+                if str(r.get('product_id', '')) not in exclude_product_ids
+            ]
+            logger.info(f"Excluded existing products: {before_count} → {len(search_results)}")
 
         # 5. 속성 필터 적용
         filtered_results = _apply_filters(search_results, parsed_query)

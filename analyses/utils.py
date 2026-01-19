@@ -310,11 +310,17 @@ def get_or_create_product_from_search(
         Product 인스턴스
     """
     from products.models import Product
+    from django.db.models import Q, Count
 
-    # 1. 기존 Product 검색
+    # 1. 기존 Product 검색 (두 가지 URL 형식 모두, 사이즈 있는 상품 우선)
+    # - 기존 데이터: https://www.musinsa.com/products/{pid} (사이즈 있음)
+    # - 새 데이터: https://www.musinsa.com/app/goods/{pid}
     product = Product.objects.filter(
-        product_url__endswith=f'/{product_id}'
-    ).first()
+        Q(product_url=f'https://www.musinsa.com/products/{product_id}') |
+        Q(product_url=f'https://www.musinsa.com/app/goods/{product_id}')
+    ).annotate(
+        size_count=Count('size_codes', filter=Q(size_codes__is_deleted=False))
+    ).order_by('-size_count').first()  # 사이즈 있는 상품 우선
 
     # 2. 없으면 생성
     if not product:
