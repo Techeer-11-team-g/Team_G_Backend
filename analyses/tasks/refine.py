@@ -16,7 +16,7 @@ from typing import Optional
 from celery import shared_task, chord
 from PIL import Image
 
-from services.redis_service import get_redis_service
+from services.redis_service import get_redis_service, RedisService
 from services.embedding_service import get_embedding_service
 from services.opensearch_client import OpenSearchService
 
@@ -128,9 +128,9 @@ def process_refine_analysis(
 
     try:
         # 상태 업데이트: RUNNING
-        redis_service.set(f"refine:{refine_id}:status", "RUNNING", ttl=3600)
-        redis_service.set(f"refine:{refine_id}:progress", "0", ttl=3600)
-        redis_service.set(f"refine:{refine_id}:total", str(len(target_object_ids)), ttl=3600)
+        redis_service.set(f"refine:{refine_id}:status", "RUNNING", ttl=RedisService.TTL_REFINE)
+        redis_service.set(f"refine:{refine_id}:progress", "0", ttl=RedisService.TTL_REFINE)
+        redis_service.set(f"refine:{refine_id}:total", str(len(target_object_ids)), ttl=RedisService.TTL_REFINE)
 
         logger.info(f"Starting refine analysis {refine_id} for {len(target_object_ids)} objects")
 
@@ -153,8 +153,8 @@ def process_refine_analysis(
 
     except Exception as e:
         logger.error(f"Refine analysis {refine_id} failed to start: {e}")
-        redis_service.set(f"refine:{refine_id}:status", "FAILED", ttl=3600)
-        redis_service.set(f"refine:{refine_id}:error", str(e), ttl=3600)
+        redis_service.set(f"refine:{refine_id}:status", "FAILED", ttl=RedisService.TTL_REFINE)
+        redis_service.set(f"refine:{refine_id}:error", str(e), ttl=RedisService.TTL_REFINE)
         raise self.retry(exc=e)
 
 
@@ -264,10 +264,10 @@ def refine_analysis_complete(
         total_mappings = sum(r.get('mappings_created', 0) for r in results)
 
         # 최종 상태 업데이트
-        redis_service.set(f"refine:{refine_id}:status", "DONE", ttl=3600)
-        redis_service.set(f"refine:{refine_id}:success_count", str(success_count), ttl=3600)
-        redis_service.set(f"refine:{refine_id}:failed_count", str(failed_count), ttl=3600)
-        redis_service.set(f"refine:{refine_id}:total_mappings", str(total_mappings), ttl=3600)
+        redis_service.set(f"refine:{refine_id}:status", "DONE", ttl=RedisService.TTL_REFINE)
+        redis_service.set(f"refine:{refine_id}:success_count", str(success_count), ttl=RedisService.TTL_REFINE)
+        redis_service.set(f"refine:{refine_id}:failed_count", str(failed_count), ttl=RedisService.TTL_REFINE)
+        redis_service.set(f"refine:{refine_id}:total_mappings", str(total_mappings), ttl=RedisService.TTL_REFINE)
 
         logger.info(
             f"Refine analysis {refine_id} completed: "
@@ -285,8 +285,8 @@ def refine_analysis_complete(
 
     except Exception as e:
         logger.error(f"Failed to complete refine analysis {refine_id}: {e}")
-        redis_service.set(f"refine:{refine_id}:status", "FAILED", ttl=3600)
-        redis_service.set(f"refine:{refine_id}:error", str(e), ttl=3600)
+        redis_service.set(f"refine:{refine_id}:status", "FAILED", ttl=RedisService.TTL_REFINE)
+        redis_service.set(f"refine:{refine_id}:error", str(e), ttl=RedisService.TTL_REFINE)
         return {
             'refine_id': refine_id,
             'status': 'FAILED',
@@ -508,7 +508,7 @@ def _update_mappings(detected_obj, search_results: list) -> int:
 def _update_progress(redis_service, refine_id: str):
     """진행률 업데이트."""
     current = redis_service.get(f"refine:{refine_id}:completed") or "0"
-    redis_service.set(f"refine:{refine_id}:completed", str(int(current) + 1), ttl=3600)
+    redis_service.set(f"refine:{refine_id}:completed", str(int(current) + 1), ttl=RedisService.TTL_REFINE)
 
 
 # =============================================================================

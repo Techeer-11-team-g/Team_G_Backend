@@ -609,8 +609,9 @@ Respond in JSON format:
             if len(history) > 20:
                 history = history[-20:]
 
-            # 24시간 TTL로 저장
-            redis.set(key, json.dumps(history, ensure_ascii=False), ttl=86400)
+            # 2시간 TTL로 저장 (연속 재분석 세션 유지용)
+            from services.redis_service import RedisService
+            redis.set(key, json.dumps(history, ensure_ascii=False), ttl=RedisService.TTL_CONVERSATION)
             logger.info(f"Saved conversation history for analysis {analysis_id}")
 
         except Exception as e:
