@@ -134,7 +134,7 @@ class OrderViewSet(mixins.CreateModelMixin, mixins.ListModelMixin, mixins.Retrie
                 'event': 'order_created',
                 'user_id': self.request.user.id,
                 'order_id': order.id,
-                'total_amount': order.total_amount,
+                'total_price': order.total_price,
                 'item_count': order.order_items.count(),
             }
         )
