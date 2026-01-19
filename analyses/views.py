@@ -89,7 +89,6 @@ class UploadedImageView(APIView):
         auto_analyze=true 시 GCS 업로드와 분석을 병렬로 시작
         """
         import base64
-        from concurrent.futures import ThreadPoolExecutor
         from .constants import ImageConfig
         from .models import ImageAnalysis
 
