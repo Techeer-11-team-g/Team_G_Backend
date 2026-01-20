@@ -264,14 +264,17 @@ class OpenSearchService:
         return results
 
     # Related categories that can be matched together
+    # 정확도를 위해 각 카테고리는 자기 자신만 매칭
     RELATED_CATEGORIES = {
-        'top': ['top', 'outer'],
-        'outer': ['outer', 'top'],
-        'pants': ['pants', 'dress'],  # 바지 + 치마/원피스
-        'bottom': ['pants', 'dress'],  # 하의 = 바지 + 치마/원피스
-        'dress': ['dress', 'pants'],  # 치마/원피스 + 바지
+        'top': ['top'],
+        'outer': ['outer'],
+        'pants': ['pants'],
+        'bottom': ['pants'],  # bottom은 pants로 매핑
+        'dress': ['dress'],
+        'skirt': ['dress'],  # skirt는 dress로 매핑
         'shoes': ['shoes'],
         'bag': ['bag'],
+        'hat': ['hat'],
     }
 
     def search_similar_products_hybrid(
@@ -356,13 +359,65 @@ class OpenSearchService:
                 if len(results) >= k:
                     break
 
-        # 4. 카테고리 필터 결과가 부족하면 벡터 유사도 높은 순으로 반환
-        if len(results) < k:
-            for item in all_results:
-                if item not in results:
-                    results.append(item)
-                    if len(results) >= k:
-                        break
+        # 4. 카테고리 필터 결과만 반환 (관련없는 상품으로 채우지 않음)
+        # 정확도 > 결과 수
+        return results
+
+    def search_by_vector(
+        self,
+        embedding: list[float],
+        k: int = 30,
+        index_name: str = 'musinsa_products',
+    ) -> list[dict]:
+        """
+        순수 벡터 유사도 검색 (카테고리 필터 없음).
+
+        카테고리를 모를 때 사용합니다.
+
+        Args:
+            embedding: Query embedding vector
+            k: Number of results to return
+            index_name: Index to search
+
+        Returns:
+            List of matching products with scores
+        """
+        query = {
+            'size': k,
+            '_source': [
+                'itemId', 'category', 'brand', 'productName', 'imageUrl', 'price', 'productUrl',
+                'attributes.colors', 'attributes.pattern', 'attributes.style_vibe',
+            ],
+            'query': {
+                'knn': {
+                    'image_vector': {
+                        'vector': embedding,
+                        'k': k,
+                    }
+                }
+            }
+        }
+
+        response = self.client.search(index=index_name, body=query)
+
+        results = []
+        for hit in response['hits']['hits']:
+            src = hit['_source']
+            attributes = src.get('attributes', {})
+
+            results.append({
+                'product_id': src.get('itemId'),
+                'score': hit['_score'],
+                'category': src.get('category'),
+                'brand': src.get('brand'),
+                'name': src.get('productName'),
+                'image_url': src.get('imageUrl'),
+                'price': src.get('price'),
+                'product_url': src.get('productUrl'),
+                'colors': attributes.get('colors', []),
+                'pattern': attributes.get('pattern'),
+                'style_vibe': attributes.get('style_vibe'),
+            })
 
         return results
 
@@ -881,11 +936,10 @@ class OpenSearchService:
                         continue
 
                 filtered.append(item)
-                if len(filtered) >= k:
-                    break
+                # k개까지 모두 수집 (pagination 지원을 위해 early break 제거)
 
             logger.info(f"Step 3 - Color filter (color={color}): {len(filtered)} products")
-            return filtered
+            return filtered[:k]  # 최종적으로 k개만 반환
         else:
             return candidates[:k]
 

@@ -31,23 +31,30 @@ class ResponseBuilder:
 
         text_lines.append("\n\n피팅해서 확인해볼까요?")
 
+        # 상품 데이터 구성 (bbox 있으면 이미지 분석 결과)
+        formatted_products = []
+        for i, p in enumerate(products[:5], 1):
+            product_data = {
+                "index": i,
+                "product_id": p.get('product_id') or p.get('id'),
+                "brand_name": p.get('brand_name', ''),
+                "product_name": p.get('product_name', ''),
+                "selling_price": p.get('selling_price', 0),
+                "image_url": p.get('product_image_url') or p.get('image_url', ''),
+                "product_url": p.get('product_url', ''),
+                "sizes": p.get('sizes', [])
+            }
+            # 이미지 분석 결과일 때만 bbox 포함
+            if p.get('bbox'):
+                product_data['bbox'] = p.get('bbox')
+                product_data['detected_object_id'] = p.get('detected_object_id')
+            formatted_products.append(product_data)
+
         return {
             "text": "".join(text_lines),
             "type": "search_results",
             "data": {
-                "products": [
-                    {
-                        "index": i,
-                        "product_id": p.get('product_id') or p.get('id'),
-                        "brand_name": p.get('brand_name', ''),
-                        "product_name": p.get('product_name', ''),
-                        "selling_price": p.get('selling_price', 0),
-                        "image_url": p.get('product_image_url') or p.get('image_url', ''),
-                        "product_url": p.get('product_url', ''),
-                        "sizes": p.get('sizes', [])
-                    }
-                    for i, p in enumerate(products[:5], 1)
-                ],
+                "products": formatted_products,
                 "total_count": len(products),
                 "understood_intent": understood_intent
             },
