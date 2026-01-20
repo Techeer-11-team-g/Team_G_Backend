@@ -163,9 +163,27 @@ class MainOrchestrator:
         # 이미지 + 텍스트
         has_image = image is not None
 
+        # 이미지 + 피팅 요청: 특별 처리 (상품 검색 후 피팅 플로우)
+        if has_image and message:
+            message_lower = message.lower()
+            fitting_keywords = ["피팅", "입어", "착용", "가상피팅", "피팅해", "입혀"]
+            if any(kw in message_lower for kw in fitting_keywords):
+                return {
+                    "intent": "fitting",
+                    "sub_intent": "fitting_with_image",
+                    "has_image": True,
+                    "requires_context": False,
+                    "references": {"type": "none"}
+                }
+
         # 간단한 키워드 기반 분류 (기본)
         # 실제로는 LangChain Function Calling 사용
         intent_result = self._keyword_based_classification(message, has_image, context)
+
+        # pending_action 처리 중이면 LLM 덮어쓰기 방지
+        if intent_result.get('continue_pending'):
+            intent_result['has_image'] = has_image
+            return intent_result
 
         # LLM 기반 정교한 분류 시도
         try:
@@ -240,6 +258,45 @@ class MainOrchestrator:
                         "intent": "commerce",
                         "sub_intent": "direct_purchase",
                         "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+
+            # 피팅을 위한 상품 검색 확인 대기 중
+            elif pending_type == 'confirm_search_for_fitting':
+                confirm_keywords = ["응", "ㅇㅇ", "해줘", "찾아", "그래", "좋아", "네", "예"]
+                cancel_keywords = ["아니", "괜찮", "취소", "안해", "싫어"]
+                if any(kw in message_lower for kw in confirm_keywords):
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "confirm_search_for_fitting",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+                elif any(kw in message_lower for kw in cancel_keywords):
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "cancel_fitting",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+
+            # 피팅할 상품 선택 대기 중
+            elif pending_type == 'select_product_for_fitting':
+                # "다 해줘", "전부" -> batch_fit
+                if "다 " in message_lower or "전부" in message_lower or "모든" in message_lower or "다해" in message_lower:
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "batch_fit",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+                # "N번 해줘" -> single_fit
+                refs = self._extract_references(message)
+                if refs.get('type') == 'index' and refs.get('indices'):
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "single_fit",
+                        "references": refs,
                         "continue_pending": True
                     }
 
@@ -442,7 +499,7 @@ class MainOrchestrator:
             return self.search_agent.handle(sub_intent, message, image, context)
 
         elif intent == 'fitting':
-            return self.fitting_agent.handle(sub_intent, context)
+            return self.fitting_agent.handle(sub_intent, context, image)
 
         elif intent == 'commerce':
             return self.commerce_agent.handle(sub_intent, message, context)
@@ -602,6 +659,7 @@ class MainOrchestrator:
                 context = self._load_context()
                 category_filter = context.get('analysis_category_filter')
                 item_type_filter = context.get('analysis_item_type_filter')
+                is_fitting_flow = context.get('fitting_flow', False)
 
                 # 결과 가져오기 (카테고리/아이템타입 필터 적용)
                 products = self.search_agent.get_analysis_results(
@@ -619,9 +677,17 @@ class MainOrchestrator:
                     # 보여준 상품 ID 저장 (재검색 시 제외용)
                     shown_ids = [p.get('product_id') for p in products if p.get('product_id')]
                     context['shown_product_ids'] = shown_ids
-                    # 필터는 유지 (재검색 시 사용)
-                    # context.pop('analysis_category_filter', None)
-                    # context.pop('analysis_item_type_filter', None)
+
+                    # 피팅 플로우인 경우: 피팅할 상품 선택 요청
+                    if is_fitting_flow:
+                        context['pending_action'] = {
+                            'type': 'select_product_for_fitting',
+                            'analysis_id': analysis_id
+                        }
+                        context['fitting_flow'] = False  # 플로우 리셋
+                        self._save_context(context)
+                        return ResponseBuilder.ask_which_product_to_fit(products)
+
                     self._save_context(context)
 
                     # 필터 적용 여부에 따른 메시지
@@ -633,6 +699,12 @@ class MainOrchestrator:
 
                     return ResponseBuilder.search_results(products, message)
                 else:
+                    # 피팅 플로우인 경우 리셋
+                    if is_fitting_flow:
+                        context['fitting_flow'] = False
+                        context['pending_action'] = None
+                        self._save_context(context)
+
                     # 필터 적용했는데 결과 없으면 다른 메시지
                     filter_name = item_type_filter or category_filter
                     if filter_name:

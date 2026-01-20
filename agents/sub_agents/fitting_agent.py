@@ -4,6 +4,7 @@ AI 패션 어시스턴트 - 피팅 에이전트
 """
 
 import logging
+import base64
 from typing import Dict, Any, Optional, List
 
 from agents.response_builder import ResponseBuilder
@@ -31,10 +32,27 @@ class FittingAgent:
     def handle(
         self,
         sub_intent: str,
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        image: Optional[bytes] = None
     ) -> Dict[str, Any]:
         """피팅 요청 처리"""
         try:
+            # 이미지 + 피팅 요청: 상품 검색 먼저 필요
+            if sub_intent == 'fitting_with_image':
+                return self.handle_fitting_with_image(image, context)
+
+            # 상품 검색 확인 응답
+            elif sub_intent == 'confirm_search_for_fitting':
+                return self.start_search_for_fitting(context)
+
+            # 피팅 취소
+            elif sub_intent == 'cancel_fitting':
+                context['pending_action'] = None
+                return ResponseBuilder.general_response(
+                    "알겠어요! 다른 것을 도와드릴까요?"
+                )
+
+            # 기존 피팅 로직
             # 전제조건 확인
             prereq_check = self._check_prerequisites(context)
             if prereq_check:
@@ -57,6 +75,98 @@ class FittingAgent:
             return ResponseBuilder.error(
                 "fitting_error",
                 "피팅 처리 중 문제가 발생했어요. 다시 시도해주세요."
+            )
+
+    @traced("fitting_agent.handle_fitting_with_image")
+    def handle_fitting_with_image(
+        self,
+        image: Optional[bytes],
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        이미지 + 피팅 요청 처리
+
+        플로우:
+        1. 이미지가 있으면 -> 상품 검색 확인 요청
+        2. 사용자 확인 후 -> 이미지 분석 시작
+        3. 분석 완료 후 -> 피팅할 상품 선택 요청
+        """
+        if not image:
+            return ResponseBuilder.error(
+                "no_image",
+                "피팅할 이미지가 없어요. 이미지를 업로드해주세요."
+            )
+
+        # 이미지를 컨텍스트에 저장 (나중에 분석용)
+        context['fitting_source_image'] = base64.b64encode(image).decode('utf-8')
+
+        # pending_action 설정: 상품 검색 확인 대기
+        context['pending_action'] = {
+            'type': 'confirm_search_for_fitting',
+            'has_image': True
+        }
+
+        return ResponseBuilder.ask_search_for_fitting()
+
+    @traced("fitting_agent.start_search_for_fitting")
+    def start_search_for_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        피팅을 위한 이미지 분석 시작
+        """
+        from analyses.models import UploadedImage, ImageAnalysis
+        from analyses.tasks.analysis import process_image_analysis
+
+        # 저장된 이미지 가져오기
+        image_b64 = context.get('fitting_source_image')
+        if not image_b64:
+            return ResponseBuilder.error(
+                "no_image",
+                "이미지 정보가 없어요. 다시 이미지를 업로드해주세요."
+            )
+
+        try:
+            # 1. 이미지 업로드
+            uploaded_image = UploadedImage.objects.create(
+                user_id=self.user_id,
+                uploaded_image_url=""
+            )
+
+            # 2. 분석 시작
+            analysis = ImageAnalysis.objects.create(
+                uploaded_image=uploaded_image,
+                image_analysis_status='PENDING'
+            )
+
+            # 3. Celery Task 실행
+            process_image_analysis.delay(
+                analysis_id=analysis.id,
+                image_url=None,
+                user_id=self.user_id,
+                image_b64=image_b64
+            )
+
+            # 4. 컨텍스트 업데이트
+            context['current_analysis_id'] = analysis.id
+            context['analysis_pending'] = True
+            context['last_search_type'] = 'image'
+            context['fitting_flow'] = True  # 피팅 플로우임을 표시
+
+            # pending_action 업데이트: 분석 완료 후 상품 선택 대기
+            context['pending_action'] = {
+                'type': 'select_product_for_fitting',
+                'analysis_id': analysis.id
+            }
+
+            # 저장된 이미지 데이터 제거 (메모리 절약)
+            context.pop('fitting_source_image', None)
+
+            return ResponseBuilder.analysis_pending_for_fitting(analysis.id)
+
+        except Exception as e:
+            logger.error(f"Start search for fitting error: {e}", exc_info=True)
+            return ResponseBuilder.error(
+                "analysis_error",
+                "이미지 분석 시작에 실패했어요. 다시 시도해주세요."
             )
 
     def _check_prerequisites(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:

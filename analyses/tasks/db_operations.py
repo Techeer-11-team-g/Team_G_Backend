@@ -94,6 +94,7 @@ def save_analysis_results(
                 bbox_y1=normalized_bbox['y1'],
                 bbox_x2=normalized_bbox['x2'],
                 bbox_y2=normalized_bbox['y2'],
+                cropped_image_url=result.get('cropped_image_url'),
             ))
 
         DetectedObject.objects.bulk_create(detected_objects_data)

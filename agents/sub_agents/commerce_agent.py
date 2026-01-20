@@ -853,6 +853,28 @@ class CommerceAgent:
             is_deleted=False
         ).first()
 
+        # 사이즈 검증: 해당 상품에 존재하는 사이즈인지 확인
+        if not size_code:
+            # 해당 상품의 가용 사이즈 조회
+            available_sizes = list(SizeCode.objects.filter(
+                product_id=product_id,
+                is_deleted=False
+            ).values_list('size_value', flat=True))
+
+            if available_sizes:
+                # 사이즈 선택 다시 요청
+                context['pending_action'] = {
+                    'type': 'select_size_for_cart',
+                    'product': selected,
+                    'local_product_id': product_id,
+                    'available_sizes': available_sizes
+                }
+                return ResponseBuilder.invalid_size(size, available_sizes)
+            else:
+                # 사이즈 정보가 없으면 FREE로 처리
+                size = 'FREE'
+                size_code = None
+
         # SelectedProduct 생성/조회
         selected_product, _ = SelectedProduct.objects.get_or_create(
             product_id=product_id,

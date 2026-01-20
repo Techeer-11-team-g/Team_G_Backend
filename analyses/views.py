@@ -747,3 +747,205 @@ class UploadedImageHistoryView(APIView):
             response_data['next_cursor'] = next_cursor
 
         return Response(response_data)
+
+
+class FeedView(APIView):
+    """
+    공개 피드 API (Pinterest 스타일)
+
+    GET /api/v1/feed - 모든 사용자의 공개된 이미지 분석 조회
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Feed"],
+        summary="공개 피드 조회",
+        description="모든 사용자의 공개된 이미지 분석 결과를 Pinterest 스타일로 조회합니다.",
+        parameters=[
+            OpenApiParameter("cursor", type=str, description="페이지네이션용 커서"),
+            OpenApiParameter("limit", type=int, default=20, description="페이지당 아이템 수"),
+            OpenApiParameter("category", type=str, description="카테고리 필터 (shoes, top, bottom 등)"),
+        ],
+        responses={200: OpenApiResponse(description="피드 목록")}
+    )
+    def get(self, request):
+        """공개 피드 조회"""
+        from .serializers import FeedItemSerializer
+
+        cursor = request.query_params.get('cursor')
+        limit = min(int(request.query_params.get('limit', 20)), 50)  # 최대 50개
+        category = request.query_params.get('category')
+
+        # 공개 + 분석 완료된 이미지만 조회
+        queryset = UploadedImage.objects.filter(
+            is_public=True,
+            is_deleted=False,
+            analyses__image_analysis_status='DONE',
+            analyses__is_deleted=False,
+        ).select_related('user').prefetch_related(
+            'analyses',
+            'detected_objects',
+            'detected_objects__product_mappings',
+            'detected_objects__product_mappings__product',
+        ).distinct().order_by('-created_at')
+
+        # 카테고리 필터
+        if category:
+            queryset = queryset.filter(
+                detected_objects__object_category=category,
+                detected_objects__is_deleted=False
+            ).distinct()
+
+        # 커서 기반 페이지네이션
+        if cursor:
+            try:
+                queryset = queryset.filter(id__lt=int(cursor))
+            except ValueError:
+                pass
+
+        images = list(queryset[:limit + 1])
+
+        has_next = len(images) > limit
+        if has_next:
+            images = images[:limit]
+
+        next_cursor = str(images[-1].id) if has_next and images else None
+
+        # detected_objects를 미리 로드하여 serializer에 전달
+        for img in images:
+            img._prefetched_detected_objects = [
+                do for do in img.detected_objects.all() if not do.is_deleted
+            ]
+            img._prefetched_analysis = next(
+                (a for a in img.analyses.all() if not a.is_deleted), None
+            )
+
+        serializer = FeedItemSerializer(images, many=True)
+
+        response_data = {'items': serializer.data}
+        if next_cursor:
+            response_data['next_cursor'] = next_cursor
+
+        return Response(response_data)
+
+
+class MyHistoryView(APIView):
+    """
+    내 히스토리 API
+
+    GET /api/v1/my-history - 본인의 이미지 분석 히스토리 조회
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Feed"],
+        summary="내 히스토리 조회",
+        description="본인이 업로드한 이미지 분석 히스토리를 조회합니다.",
+        parameters=[
+            OpenApiParameter("cursor", type=str, description="페이지네이션용 커서"),
+            OpenApiParameter("limit", type=int, default=20, description="페이지당 아이템 수"),
+        ],
+        responses={200: OpenApiResponse(description="히스토리 목록")}
+    )
+    def get(self, request):
+        """내 히스토리 조회"""
+        from .serializers import FeedItemSerializer
+
+        cursor = request.query_params.get('cursor')
+        limit = min(int(request.query_params.get('limit', 20)), 50)
+
+        # 본인의 이미지만 조회 (삭제되지 않은 것)
+        queryset = UploadedImage.objects.filter(
+            user=request.user,
+            is_deleted=False,
+        ).select_related('user').prefetch_related(
+            'analyses',
+            'detected_objects',
+            'detected_objects__product_mappings',
+            'detected_objects__product_mappings__product',
+        ).order_by('-created_at')
+
+        # 커서 기반 페이지네이션
+        if cursor:
+            try:
+                queryset = queryset.filter(id__lt=int(cursor))
+            except ValueError:
+                pass
+
+        images = list(queryset[:limit + 1])
+
+        has_next = len(images) > limit
+        if has_next:
+            images = images[:limit]
+
+        next_cursor = str(images[-1].id) if has_next and images else None
+
+        # detected_objects를 미리 로드
+        for img in images:
+            img._prefetched_detected_objects = [
+                do for do in img.detected_objects.all() if not do.is_deleted
+            ]
+            img._prefetched_analysis = next(
+                (a for a in img.analyses.all() if not a.is_deleted), None
+            )
+
+        serializer = FeedItemSerializer(images, many=True)
+
+        response_data = {'items': serializer.data}
+        if next_cursor:
+            response_data['next_cursor'] = next_cursor
+
+        return Response(response_data)
+
+
+class TogglePublicView(APIView):
+    """
+    공개/비공개 토글 API
+
+    PATCH /api/v1/uploaded-images/{id}/visibility - 공개 상태 토글
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Feed"],
+        summary="공개/비공개 토글",
+        description="업로드된 이미지의 공개 상태를 변경합니다.",
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "is_public": {"type": "boolean", "description": "공개 여부"}
+                }
+            }
+        },
+        responses={200: OpenApiResponse(description="변경 완료")}
+    )
+    def patch(self, request, uploaded_image_id):
+        """공개 상태 토글"""
+        try:
+            image = UploadedImage.objects.get(
+                id=uploaded_image_id,
+                user=request.user,
+                is_deleted=False
+            )
+        except UploadedImage.DoesNotExist:
+            return Response(
+                {'error': '이미지를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # is_public 값 변경
+        is_public = request.data.get('is_public')
+        if is_public is not None:
+            image.is_public = is_public
+        else:
+            # 값이 없으면 토글
+            image.is_public = not image.is_public
+
+        image.save(update_fields=['is_public', 'updated_at'])
+
+        return Response({
+            'id': image.id,
+            'is_public': image.is_public,
+            'message': '공개로 설정되었습니다.' if image.is_public else '비공개로 설정되었습니다.'
+        })

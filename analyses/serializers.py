@@ -583,3 +583,91 @@ class UploadedImageHistoryResponseSerializer(serializers.Serializer):
 
     def get_items(self, obj):
         return HistoryItemSerializer(self.detected_objects, many=True).data
+
+
+# =============================================================================
+# Feed Serializers (Pinterest 스타일 피드용)
+# =============================================================================
+
+class FeedUserSerializer(serializers.Serializer):
+    """피드 아이템의 사용자 정보 Serializer."""
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+
+
+class FeedDetectedObjectSerializer(serializers.Serializer):
+    """피드용 검출 객체 Serializer (간소화 버전)."""
+    id = serializers.IntegerField()
+    category = serializers.CharField(source='object_category')
+    cropped_image_url = serializers.CharField(allow_null=True, required=False)
+    matched_product = serializers.SerializerMethodField()
+
+    def get_matched_product(self, obj):
+        """매칭된 상품 정보 반환 (최상위 1개)."""
+        # prefetch된 데이터 사용
+        mappings = getattr(obj, '_prefetched_objects_cache', {}).get('product_mappings')
+        if mappings is not None:
+            valid_mappings = [m for m in mappings if not m.is_deleted]
+            if valid_mappings:
+                best = max(valid_mappings, key=lambda m: m.confidence_score)
+                product = best.product
+                return {
+                    'id': product.id,
+                    'brand_name': product.brand_name,
+                    'product_name': product.product_name,
+                    'selling_price': product.selling_price,
+                    'image_url': product.product_image_url,
+                    'product_url': product.product_url,
+                }
+        else:
+            mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+            if mapping:
+                product = mapping.product
+                return {
+                    'id': product.id,
+                    'brand_name': product.brand_name,
+                    'product_name': product.product_name,
+                    'selling_price': product.selling_price,
+                    'image_url': product.product_image_url,
+                    'product_url': product.product_url,
+                }
+        return None
+
+
+class FeedItemSerializer(serializers.ModelSerializer):
+    """피드 아이템 Serializer (업로드 이미지 + 검출 객체들)."""
+    user = serializers.SerializerMethodField()
+    detected_objects = serializers.SerializerMethodField()
+    analysis_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UploadedImage
+        fields = ['id', 'uploaded_image_url', 'user', 'created_at', 'is_public', 'detected_objects', 'analysis_status']
+
+    def get_user(self, obj):
+        if obj.user:
+            return {
+                'id': obj.user.id,
+                'username': obj.user.username,
+            }
+        return None
+
+    def get_analysis_status(self, obj):
+        """분석 상태 반환."""
+        analysis = getattr(obj, '_prefetched_analysis', None)
+        if analysis is None:
+            analysis = obj.analyses.filter(is_deleted=False).order_by('-created_at').first()
+        if analysis:
+            return analysis.image_analysis_status
+        return None
+
+    def get_detected_objects(self, obj):
+        """검출된 객체들 반환."""
+        # prefetch된 detected_objects 사용
+        detected_objects = getattr(obj, '_prefetched_detected_objects', None)
+        if detected_objects is None:
+            detected_objects = DetectedObject.objects.filter(
+                uploaded_image=obj,
+                is_deleted=False
+            ).prefetch_related('product_mappings', 'product_mappings__product')
+        return FeedDetectedObjectSerializer(detected_objects, many=True).data
