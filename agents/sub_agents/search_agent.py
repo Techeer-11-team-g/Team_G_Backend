@@ -15,8 +15,10 @@ from services import (
 )
 from services.opensearch_client import OpenSearchService
 from agents.response_builder import ResponseBuilder
+from config.tracing import traced, get_tracer
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 
 class SearchAgent:
@@ -35,7 +37,8 @@ class SearchAgent:
         self.embedding_service = get_embedding_service()
         self.redis = get_redis_service()
 
-    async def handle(
+    @traced("search_agent.handle")
+    def handle(
         self,
         sub_intent: str,
         message: str,
@@ -46,21 +49,21 @@ class SearchAgent:
         try:
             if sub_intent == 'new_search':
                 if image:
-                    return await self.image_search(image, message, context)
+                    return self.image_search(image, message, context)
                 else:
-                    return await self.text_search(message, context)
+                    return self.text_search(message, context)
 
             elif sub_intent == 'refine':
-                return await self.refine_search(message, context)
+                return self.refine_search(message, context)
 
             elif sub_intent == 'similar':
-                return await self.similar_search(context)
+                return self.similar_search(context)
 
             elif sub_intent == 'cross_recommend':
-                return await self.cross_category_search(message, image, context)
+                return self.cross_category_search(message, image, context)
 
             else:
-                return await self.text_search(message, context)
+                return self.text_search(message, context)
 
         except Exception as e:
             logger.error(f"SearchAgent error: {e}", exc_info=True)
@@ -69,7 +72,8 @@ class SearchAgent:
                 "검색 중 문제가 발생했어요. 다시 시도해주세요."
             )
 
-    async def image_search(
+    @traced("search_agent.image_search")
+    def image_search(
         self,
         image: bytes,
         message: str,
@@ -90,7 +94,6 @@ class SearchAgent:
 
         try:
             # 1. 이미지 업로드
-            filename = f"agent_{uuid.uuid4().hex[:8]}.jpg"
             uploaded_image = UploadedImage.objects.create(
                 user_id=self.user_id,
                 uploaded_image_url=""  # GCS 업로드 후 업데이트
@@ -124,7 +127,8 @@ class SearchAgent:
                 "이미지 처리 중 문제가 발생했어요. 다시 시도해주세요."
             )
 
-    async def text_search(
+    @traced("search_agent.text_search")
+    def text_search(
         self,
         message: str,
         context: Dict[str, Any]
@@ -178,7 +182,8 @@ class SearchAgent:
                 "검색 중 문제가 발생했어요. 다시 시도해주세요."
             )
 
-    async def refine_search(
+    @traced("search_agent.refine_search")
+    def refine_search(
         self,
         message: str,
         context: Dict[str, Any]
@@ -193,7 +198,7 @@ class SearchAgent:
 
         if not analysis_id:
             # 분석 컨텍스트 없으면 텍스트 검색으로 전환
-            return await self.text_search(message, context)
+            return self.text_search(message, context)
 
         try:
             # 기존 parse_refine_query_task 활용!
@@ -212,12 +217,12 @@ class SearchAgent:
             # 결과 가져오기
             from analyses.models import ObjectProductMapping
 
-            mappings = ObjectProductMapping.objects.filter(
-                detected_object__uploaded_image__imageanalysis__id=analysis_id,
+            mappings = list(ObjectProductMapping.objects.filter(
+                detected_object__uploaded_image__analyses__id=analysis_id,
                 is_deleted=False
             ).select_related(
                 'product'
-            ).order_by('-confidence_score')[:5]
+            ).order_by('-confidence_score')[:5])
 
             products = [self._mapping_to_product(m) for m in mappings]
 
@@ -238,9 +243,10 @@ class SearchAgent:
         except Exception as e:
             logger.error(f"Refine search error: {e}", exc_info=True)
             # 폴백: 텍스트 검색으로 전환
-            return await self.text_search(message, context)
+            return self.text_search(message, context)
 
-    async def similar_search(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    @traced("search_agent.similar_search")
+    def similar_search(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """현재 선택 상품과 유사한 상품 검색"""
         selected = context.get('selected_product')
         if not selected:
@@ -289,7 +295,8 @@ class SearchAgent:
                 "비슷한 상품을 찾는 중 문제가 발생했어요."
             )
 
-    async def cross_category_search(
+    @traced("search_agent.cross_category_search")
+    def cross_category_search(
         self,
         message: str,
         image: Optional[bytes],
@@ -346,7 +353,7 @@ class SearchAgent:
 
         except Exception as e:
             logger.error(f"Cross category search error: {e}", exc_info=True)
-            return await self.text_search(message, context)
+            return self.text_search(message, context)
 
     def _mapping_to_product(self, mapping) -> Dict[str, Any]:
         """ObjectProductMapping을 product dict로 변환"""
@@ -383,7 +390,7 @@ class SearchAgent:
         from analyses.models import ObjectProductMapping
 
         mappings = ObjectProductMapping.objects.filter(
-            detected_object__uploaded_image__imageanalysis__id=analysis_id,
+            detected_object__uploaded_image__analyses__id=analysis_id,
             is_deleted=False
         ).select_related('product').order_by('-confidence_score')[:5]
 
