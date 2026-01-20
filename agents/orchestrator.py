@@ -13,8 +13,10 @@ from services import get_langchain_service, get_redis_service
 from agents.schemas import INTENT_CLASSIFICATION_SCHEMA, SUPPORTED_CATEGORIES
 from agents.response_builder import ResponseBuilder
 from agents.sub_agents import SearchAgent, FittingAgent, CommerceAgent
+from config.tracing import traced, get_tracer
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 # Redis TTL 설정 (기존 설정 활용)
 TTL_SESSION = 2 * 60 * 60  # 2시간 (기존 TTL_CONVERSATION과 동일)
@@ -45,7 +47,8 @@ class MainOrchestrator:
         self.fitting_agent = FittingAgent(user_id)
         self.commerce_agent = CommerceAgent(user_id)
 
-    async def process_message(
+    @traced("orchestrator.process_message", attributes={"user_id": "user_id"})
+    def process_message(
         self,
         message: str,
         image: Optional[bytes] = None
@@ -80,7 +83,7 @@ class MainOrchestrator:
                 message = message[:10000]
 
             # 3. Intent Classification
-            intent_result = await self._classify_intent(message, image, context)
+            intent_result = self._classify_intent(message, image, context)
             context['intent_result'] = intent_result
 
             logger.info(
@@ -95,7 +98,7 @@ class MainOrchestrator:
             )
 
             # 4. 라우팅 및 처리
-            response = await self._route_to_agent(intent_result, message, image, context)
+            response = self._route_to_agent(intent_result, message, image, context)
 
             # 5. 대화 이력 저장
             self._save_turn(message, response.get('text', ''), context)
@@ -134,7 +137,8 @@ class MainOrchestrator:
                 "context": {}
             }
 
-    async def _classify_intent(
+    @traced("orchestrator.classify_intent")
+    def _classify_intent(
         self,
         message: str,
         image: Optional[bytes],
@@ -164,7 +168,7 @@ class MainOrchestrator:
 
         # LLM 기반 정교한 분류 시도
         try:
-            llm_result = await self._llm_classify_intent(message, context)
+            llm_result = self._llm_classify_intent(message, context)
             if llm_result:
                 intent_result.update(llm_result)
         except Exception as e:
@@ -295,7 +299,7 @@ class MainOrchestrator:
 
         return {"type": "none"}
 
-    async def _llm_classify_intent(
+    def _llm_classify_intent(
         self,
         message: str,
         context: Dict[str, Any]
@@ -330,7 +334,8 @@ class MainOrchestrator:
             logger.warning(f"LLM classification error: {e}")
             return None
 
-    async def _route_to_agent(
+    @traced("orchestrator.route_to_agent")
+    def _route_to_agent(
         self,
         intent_result: Dict[str, Any],
         message: str,
@@ -343,27 +348,27 @@ class MainOrchestrator:
 
         # 복합 의도 처리
         if intent == 'compound':
-            return await self._handle_compound(intent_result, message, image, context)
+            return self._handle_compound(intent_result, message, image, context)
 
         # 단일 의도 라우팅
         if intent == 'search':
-            return await self.search_agent.handle(sub_intent, message, image, context)
+            return self.search_agent.handle(sub_intent, message, image, context)
 
         elif intent == 'fitting':
-            return await self.fitting_agent.handle(sub_intent, context)
+            return self.fitting_agent.handle(sub_intent, context)
 
         elif intent == 'commerce':
-            return await self.commerce_agent.handle(sub_intent, message, context)
+            return self.commerce_agent.handle(sub_intent, message, context)
 
         elif intent == 'general':
-            return await self._handle_general(sub_intent, message)
+            return self._handle_general(sub_intent, message)
 
         else:
             return ResponseBuilder.general_response(
                 "무엇을 도와드릴까요?"
             )
 
-    async def _handle_compound(
+    def _handle_compound(
         self,
         intent_result: Dict[str, Any],
         message: str,
@@ -373,9 +378,9 @@ class MainOrchestrator:
         """복합 의도 처리 (예: "찾아서 입어봐")"""
         # TODO: 순차적 처리 구현
         # 일단 첫 번째 의도만 처리
-        return await self.search_agent.handle('new_search', message, image, context)
+        return self.search_agent.handle('new_search', message, image, context)
 
-    async def _handle_general(
+    def _handle_general(
         self,
         sub_intent: str,
         message: str

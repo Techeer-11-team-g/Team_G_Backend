@@ -7,8 +7,11 @@ import logging
 from typing import Dict, Any, Optional, List
 
 from agents.response_builder import ResponseBuilder
+from config.tracing import traced, get_tracer
+from products.models import Product
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 
 class FittingAgent:
@@ -24,7 +27,8 @@ class FittingAgent:
     def __init__(self, user_id: int):
         self.user_id = user_id
 
-    async def handle(
+    @traced("fitting_agent.handle")
+    def handle(
         self,
         sub_intent: str,
         context: Dict[str, Any]
@@ -32,21 +36,21 @@ class FittingAgent:
         """피팅 요청 처리"""
         try:
             # 전제조건 확인
-            prereq_check = await self._check_prerequisites(context)
+            prereq_check = self._check_prerequisites(context)
             if prereq_check:
                 return prereq_check
 
             if sub_intent == 'single_fit':
-                return await self.single_fitting(context)
+                return self.single_fitting(context)
 
             elif sub_intent == 'batch_fit':
-                return await self.batch_fitting(context)
+                return self.batch_fitting(context)
 
             elif sub_intent == 'compare_fit':
-                return await self.compare_fitting(context)
+                return self.compare_fitting(context)
 
             else:
-                return await self.single_fitting(context)
+                return self.single_fitting(context)
 
         except Exception as e:
             logger.error(f"FittingAgent error: {e}", exc_info=True)
@@ -55,7 +59,7 @@ class FittingAgent:
                 "피팅 처리 중 문제가 발생했어요. 다시 시도해주세요."
             )
 
-    async def _check_prerequisites(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _check_prerequisites(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """전제조건 확인"""
         # 1. 검색 결과 확인
         if not context.get('has_search_results') and not context.get('search_results'):
@@ -78,7 +82,30 @@ class FittingAgent:
 
         return None
 
-    async def single_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _resolve_product(self, product_info: Dict[str, Any]) -> Optional[Product]:
+        """
+        검색 결과의 상품 정보를 로컬 Product로 변환
+
+        검색 결과는 외부 API(Musinsa)의 product_id를 사용하지만,
+        FittingImage는 로컬 Product FK를 참조하므로 변환이 필요.
+
+        Args:
+            product_info: 검색 결과의 상품 정보 (product_url 포함)
+
+        Returns:
+            로컬 Product 또는 None
+        """
+        product_url = product_info.get('product_url')
+        if not product_url:
+            return None
+
+        return Product.objects.filter(
+            product_url=product_url,
+            is_deleted=False
+        ).first()
+
+    @traced("fitting_agent.single_fitting")
+    def single_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         단일 피팅 - 기존 API 활용
 
@@ -87,7 +114,7 @@ class FittingAgent:
         3. 피팅 요청 (FittingImage 생성)
         4. Celery Task 실행 (process_fitting_task)
         """
-        from fittings.models import FittingImage
+        from fittings.models import FittingImage, UserImage
         from fittings.tasks import process_fitting_task
 
         # 1. 선택된 상품 확인
@@ -115,21 +142,25 @@ class FittingAgent:
         # 2. 사용자 이미지
         user_image = context.get('user_image')
         if not user_image:
-            from fittings.models import UserImage
             user_image = UserImage.objects.filter(
                 user_id=self.user_id,
                 is_deleted=False
             ).order_by('-created_at').first()
-
             if not user_image:
                 return ResponseBuilder.ask_user_image()
 
-        product_id = selected.get('product_id') or selected.get('id')
+        # 3. 로컬 Product 조회 (외부 product_id → 로컬 Product)
+        local_product = self._resolve_product(selected)
+        if not local_product:
+            return ResponseBuilder.error(
+                "product_not_found",
+                "해당 상품 정보를 찾을 수 없어요. 다른 상품을 선택해주세요."
+            )
 
-        # 3. 캐시 확인
+        # 4. 캐시 확인
         existing = FittingImage.objects.filter(
             user_image=user_image,
-            product_id=product_id,
+            product=local_product,
             fitting_image_status='DONE',
             is_deleted=False
         ).first()
@@ -141,14 +172,14 @@ class FittingAgent:
                 selected
             )
 
-        # 4. 새 피팅 생성
+        # 5. 새 피팅 생성
         fitting = FittingImage.objects.create(
             user_image=user_image,
-            product_id=product_id,
+            product=local_product,
             fitting_image_status='PENDING'
         )
 
-        # 5. Celery Task 실행
+        # 6. Celery Task 실행
         process_fitting_task.delay(fitting.id)
 
         # 컨텍스트 업데이트
@@ -158,13 +189,14 @@ class FittingAgent:
 
         return ResponseBuilder.fitting_pending(fitting.id, selected)
 
-    async def batch_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    @traced("fitting_agent.batch_fitting")
+    def batch_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         배치 피팅 - 여러 상품 동시 피팅
 
         검색 결과 전체 또는 선택된 상품들을 병렬로 피팅
         """
-        from fittings.models import FittingImage
+        from fittings.models import FittingImage, UserImage
         from fittings.tasks import process_fitting_task
 
         products = context.get('search_results', [])
@@ -173,12 +205,10 @@ class FittingAgent:
 
         user_image = context.get('user_image')
         if not user_image:
-            from fittings.models import UserImage
             user_image = UserImage.objects.filter(
                 user_id=self.user_id,
                 is_deleted=False
             ).order_by('-created_at').first()
-
             if not user_image:
                 return ResponseBuilder.ask_user_image()
 
@@ -196,13 +226,17 @@ class FittingAgent:
         products = products[:5]
         fitting_ids = []
 
-        for product in products:
-            product_id = product.get('product_id') or product.get('id')
+        for product_info in products:
+            # 로컬 Product 조회
+            local_product = self._resolve_product(product_info)
+            if not local_product:
+                logger.warning(f"Product not found for URL: {product_info.get('product_url')}")
+                continue
 
             # 캐시 확인
             existing = FittingImage.objects.filter(
                 user_image=user_image,
-                product_id=product_id,
+                product=local_product,
                 fitting_image_status='DONE',
                 is_deleted=False
             ).first()
@@ -213,7 +247,7 @@ class FittingAgent:
                 # 새 피팅 생성
                 fitting = FittingImage.objects.create(
                     user_image=user_image,
-                    product_id=product_id,
+                    product=local_product,
                     fitting_image_status='PENDING'
                 )
                 process_fitting_task.delay(fitting.id)
@@ -225,7 +259,7 @@ class FittingAgent:
 
         return ResponseBuilder.batch_fitting_pending(fitting_ids, len(fitting_ids))
 
-    async def compare_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def compare_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """비교 피팅 - 2개 상품 비교"""
         # 배치 피팅과 동일하지만 최대 2개
         products = context.get('search_results', [])
@@ -244,7 +278,7 @@ class FittingAgent:
             products = products[:2]
 
         context['search_results'] = products
-        return await self.batch_fitting(context)
+        return self.batch_fitting(context)
 
     def get_fitting_status(self, fitting_id: int) -> Dict[str, Any]:
         """피팅 상태 조회"""

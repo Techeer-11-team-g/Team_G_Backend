@@ -10,8 +10,11 @@ from typing import Dict, Any, Optional, List
 from django.db import transaction
 
 from agents.response_builder import ResponseBuilder
+from config.tracing import traced, get_tracer
+from products.models import Product
 
 logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 
 class CommerceAgent:
@@ -28,7 +31,24 @@ class CommerceAgent:
     def __init__(self, user_id: int):
         self.user_id = user_id
 
-    async def handle(
+    def _resolve_product(self, product_info: Dict[str, Any]) -> Optional[Product]:
+        """
+        검색 결과의 상품 정보를 로컬 Product로 변환
+
+        검색 결과는 외부 API(Musinsa)의 product_id를 사용하지만,
+        SelectedProduct/CartItem은 로컬 Product FK를 참조하므로 변환이 필요.
+        """
+        product_url = product_info.get('product_url')
+        if not product_url:
+            return None
+
+        return Product.objects.filter(
+            product_url=product_url,
+            is_deleted=False
+        ).first()
+
+    @traced("commerce_agent.handle")
+    def handle(
         self,
         sub_intent: str,
         message: str,
@@ -37,31 +57,31 @@ class CommerceAgent:
         """커머스 요청 처리"""
         try:
             if sub_intent == 'add_cart':
-                return await self.add_to_cart(message, context)
+                return self.add_to_cart(message, context)
 
             elif sub_intent == 'view_cart':
-                return await self.view_cart()
+                return self.view_cart()
 
             elif sub_intent == 'remove_cart':
-                return await self.remove_from_cart(message, context)
+                return self.remove_from_cart(message, context)
 
             elif sub_intent == 'update_cart':
-                return await self.update_cart(message, context)
+                return self.update_cart(message, context)
 
             elif sub_intent == 'size_recommend':
-                return await self.recommend_size(message, context)
+                return self.recommend_size(message, context)
 
             elif sub_intent == 'checkout':
-                return await self.checkout(context)
+                return self.checkout(context)
 
             elif sub_intent == 'order_status':
-                return await self.order_status(message)
+                return self.order_status(message)
 
             elif sub_intent == 'cancel_order':
-                return await self.cancel_order(message)
+                return self.cancel_order(message)
 
             else:
-                return await self.view_cart()
+                return self.view_cart()
 
         except Exception as e:
             logger.error(f"CommerceAgent error: {e}", exc_info=True)
@@ -70,7 +90,8 @@ class CommerceAgent:
                 "처리 중 문제가 발생했어요. 다시 시도해주세요."
             )
 
-    async def add_to_cart(
+    @traced("commerce_agent.add_to_cart")
+    def add_to_cart(
         self,
         message: str,
         context: Dict[str, Any]
@@ -108,9 +129,17 @@ class CommerceAgent:
                     products
                 )
 
-        product_id = selected.get('product_id') or selected.get('id')
+        # 2. 로컬 Product 조회 (외부 product_id → 로컬 Product)
+        local_product = self._resolve_product(selected)
+        if not local_product:
+            return ResponseBuilder.error(
+                "product_not_found",
+                "해당 상품 정보를 찾을 수 없어요. 다른 상품을 선택해주세요."
+            )
 
-        # 2. 사이즈 파싱
+        product_id = local_product.id  # 로컬 Product ID 사용
+
+        # 3. 사이즈 파싱
         size = self._parse_size(message)
         commerce_params = context.get('intent_result', {}).get('commerce_params', {})
         if not size:
@@ -121,11 +150,10 @@ class CommerceAgent:
             sizes = selected.get('sizes', [])
             if not sizes:
                 # SizeCode에서 조회
-                size_codes = SizeCode.objects.filter(
+                sizes = list(SizeCode.objects.filter(
                     product_id=product_id,
                     is_deleted=False
-                ).values_list('size_value', flat=True)
-                sizes = list(size_codes)
+                ).values_list('size_value', flat=True))
 
             if sizes:
                 return ResponseBuilder.ask_size(
@@ -135,35 +163,34 @@ class CommerceAgent:
             else:
                 size = 'FREE'
 
-        # 3. 수량 파싱 및 검증
+        # 4. 수량 파싱 및 검증
         quantity = self._parse_quantity(message)
         if not quantity:
             quantity = commerce_params.get('quantity', 1)
         # 수량은 최소 1, 최대 99
         quantity = max(1, min(99, quantity))
 
-        # 4. SizeCode 조회
+        # 5. SizeCode 조회
         size_code = SizeCode.objects.filter(
             product_id=product_id,
             size_value=size,
             is_deleted=False
         ).first()
 
-        # 5. SelectedProduct 생성/조회
+        # 6. SelectedProduct 생성/조회
         selected_product, _ = SelectedProduct.objects.get_or_create(
             product_id=product_id,
             size_code=size_code,
             defaults={'selected_product_inventory': 0}
         )
 
-        # 6. CartItem 생성/업데이트
+        # 7. CartItem 생성/업데이트
         cart_item, created = CartItem.objects.get_or_create(
             user_id=self.user_id,
             selected_product=selected_product,
             is_deleted=False,
             defaults={'quantity': quantity}
         )
-
         if not created:
             cart_item.quantity += quantity
             cart_item.save()
@@ -174,7 +201,8 @@ class CommerceAgent:
 
         return ResponseBuilder.cart_added(selected, size, cart_item.quantity)
 
-    async def view_cart(self) -> Dict[str, Any]:
+    @traced("commerce_agent.view_cart")
+    def view_cart(self) -> Dict[str, Any]:
         """장바구니 조회"""
         from orders.models import CartItem
 
@@ -185,9 +213,6 @@ class CommerceAgent:
             'selected_product__product',
             'selected_product__size_code'
         )
-
-        if not items:
-            return ResponseBuilder.cart_list([], 0)
 
         cart_items = []
         total_price = 0
@@ -213,7 +238,7 @@ class CommerceAgent:
 
         return ResponseBuilder.cart_list(cart_items, total_price)
 
-    async def remove_from_cart(
+    def remove_from_cart(
         self,
         message: str,
         context: Dict[str, Any]
@@ -225,18 +250,16 @@ class CommerceAgent:
         refs = context.get('intent_result', {}).get('references', {})
         indices = refs.get('indices', [])
 
-        items = CartItem.objects.filter(
+        items_list = list(CartItem.objects.filter(
             user_id=self.user_id,
             is_deleted=False
-        ).select_related('selected_product__product')
+        ).select_related('selected_product__product'))
 
-        if not items:
+        if not items_list:
             return ResponseBuilder.error(
                 "empty_cart",
                 "장바구니가 비어있어요."
             )
-
-        items_list = list(items)
 
         if indices:
             # 인덱스로 삭제
@@ -256,7 +279,10 @@ class CommerceAgent:
         else:
             # 전체 삭제 확인
             if "전부" in message or "다" in message or "비워" in message:
-                items.update(is_deleted=True)
+                CartItem.objects.filter(
+                    user_id=self.user_id,
+                    is_deleted=False
+                ).update(is_deleted=True)
                 return {
                     "text": "장바구니를 비웠어요.",
                     "type": "cart_cleared",
@@ -285,7 +311,7 @@ class CommerceAgent:
             ]
         }
 
-    async def update_cart(
+    def update_cart(
         self,
         message: str,
         context: Dict[str, Any]
@@ -328,9 +354,9 @@ class CommerceAgent:
                 ]
             }
 
-        return await self.view_cart()
+        return self.view_cart()
 
-    async def recommend_size(
+    def recommend_size(
         self,
         message: str,
         context: Dict[str, Any]
@@ -366,6 +392,7 @@ class CommerceAgent:
         product_id = selected.get('product_id') or selected.get('id')
 
         from products.models import SizeCode
+
         sizes = list(SizeCode.objects.filter(
             product_id=product_id,
             is_deleted=False
@@ -385,31 +412,26 @@ class CommerceAgent:
             selected
         )
 
-    async def checkout(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    @traced("commerce_agent.checkout")
+    def checkout(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """주문 생성 - 기존 Order 모델 활용"""
         from orders.models import CartItem, Order, OrderItem
         from users.models import User
 
         # 장바구니 확인
-        cart_items = CartItem.objects.filter(
+        cart_items = list(CartItem.objects.filter(
             user_id=self.user_id,
             is_deleted=False
-        ).select_related('selected_product__product')
+        ).select_related('selected_product__product'))
 
         if not cart_items:
-            return ResponseBuilder.error(
-                "empty_cart",
-                "장바구니가 비어있어요. 상품을 담아주세요."
-            )
+            return ResponseBuilder.error("empty_cart", "장바구니가 비어있어요. 상품을 담아주세요.")
 
         # 사용자 정보
         try:
             user = User.objects.get(id=self.user_id)
         except User.DoesNotExist:
-            return ResponseBuilder.error(
-                "user_not_found",
-                "사용자 정보를 찾을 수 없어요."
-            )
+            return ResponseBuilder.error("user_not_found", "사용자 정보를 찾을 수 없어요.")
 
         # 총 가격 계산
         total_price = sum(
@@ -435,15 +457,14 @@ class CommerceAgent:
                 )
 
             # 장바구니 비우기
-            cart_items.update(is_deleted=True)
+            CartItem.objects.filter(
+                user_id=self.user_id,
+                is_deleted=False
+            ).update(is_deleted=True)
 
-        return ResponseBuilder.order_created(
-            order.id,
-            total_price,
-            cart_items.count()
-        )
+        return ResponseBuilder.order_created(order.id, total_price, len(cart_items))
 
-    async def order_status(self, message: str) -> Dict[str, Any]:
+    def order_status(self, message: str) -> Dict[str, Any]:
         """주문 상태 조회"""
         from orders.models import Order, OrderItem
 
@@ -454,43 +475,43 @@ class CommerceAgent:
             # 특정 주문 조회
             try:
                 order = Order.objects.get(id=order_id, user_id=self.user_id)
-                items = OrderItem.objects.filter(order=order).select_related(
+                items = list(OrderItem.objects.filter(order=order).select_related(
                     'selected_product__product'
-                )
-
-                items_text = "\n".join([
-                    f"- {item.selected_product.product.product_name}: {item.order_status}"
-                    for item in items
-                ])
-
-                return {
-                    "text": f"주문 #{order.id} 상태:\n\n{items_text}\n\n"
-                            f"총 금액: ₩{order.total_price:,}",
-                    "type": "order_detail",
-                    "data": {
-                        "order_id": order.id,
-                        "total_price": order.total_price,
-                        "items": [
-                            {
-                                "product_name": item.selected_product.product.product_name,
-                                "status": item.order_status
-                            }
-                            for item in items
-                        ]
-                    },
-                    "suggestions": []
-                }
+                ))
             except Order.DoesNotExist:
                 return ResponseBuilder.error(
                     "order_not_found",
                     "주문을 찾을 수 없어요."
                 )
 
+            items_text = "\n".join([
+                f"- {item.selected_product.product.product_name}: {item.order_status}"
+                for item in items
+            ])
+
+            return {
+                "text": f"주문 #{order.id} 상태:\n\n{items_text}\n\n"
+                        f"총 금액: ₩{order.total_price:,}",
+                "type": "order_detail",
+                "data": {
+                    "order_id": order.id,
+                    "total_price": order.total_price,
+                    "items": [
+                        {
+                            "product_name": item.selected_product.product.product_name,
+                            "status": item.order_status
+                        }
+                        for item in items
+                    ]
+                },
+                "suggestions": []
+            }
+
         # 최근 주문 목록
-        orders = Order.objects.filter(
+        orders = list(Order.objects.filter(
             user_id=self.user_id,
             is_deleted=False
-        ).order_by('-created_at')[:5]
+        ).order_by('-created_at')[:5])
 
         if not orders:
             return {
@@ -523,7 +544,7 @@ class CommerceAgent:
             "suggestions": []
         }
 
-    async def cancel_order(self, message: str) -> Dict[str, Any]:
+    def cancel_order(self, message: str) -> Dict[str, Any]:
         """주문 취소"""
         from orders.models import Order, OrderItem
 

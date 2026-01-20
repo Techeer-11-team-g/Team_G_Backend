@@ -4,8 +4,6 @@ AI 패션 어시스턴트 - API Views
 """
 
 import logging
-import asyncio
-from functools import wraps
 
 from rest_framework import status
 from rest_framework.views import APIView
@@ -21,19 +19,6 @@ from agents.serializers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def async_to_sync(func):
-    """async 함수를 sync로 변환하는 데코레이터"""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(func(*args, **kwargs))
-        finally:
-            loop.close()
-    return wrapper
 
 
 class ChatView(APIView):
@@ -108,10 +93,9 @@ class ChatView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    @async_to_sync
-    async def _process_message(self, orchestrator, message, image_bytes):
-        """비동기 메시지 처리"""
-        return await orchestrator.process_message(message, image_bytes)
+    def _process_message(self, orchestrator, message, image_bytes):
+        """메시지 처리"""
+        return orchestrator.process_message(message, image_bytes)
 
 
 class ChatStatusView(APIView):

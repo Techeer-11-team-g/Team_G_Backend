@@ -300,6 +300,50 @@ class RedisService:
             logger.error(f"Redis exists error: {e}")
             return False
 
+    def setex(self, key: str, ttl: int, value: str) -> bool:
+        """Set a value with expiration."""
+        try:
+            self.client.setex(key, ttl, value)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis setex error: {e}")
+            return False
+
+    def lpush(self, key: str, value: str) -> bool:
+        """Push a value to the left of a list."""
+        try:
+            self.client.lpush(key, value)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis lpush error: {e}")
+            return False
+
+    def ltrim(self, key: str, start: int, end: int) -> bool:
+        """Trim a list to the specified range."""
+        try:
+            self.client.ltrim(key, start, end)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis ltrim error: {e}")
+            return False
+
+    def lrange(self, key: str, start: int, end: int) -> list:
+        """Get a range of elements from a list."""
+        try:
+            return self.client.lrange(key, start, end)
+        except redis.RedisError as e:
+            logger.error(f"Redis lrange error: {e}")
+            return []
+
+    def expire(self, key: str, ttl: int) -> bool:
+        """Set expiration on a key."""
+        try:
+            self.client.expire(key, ttl)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis expire error: {e}")
+            return False
+
 
 # Singleton instance
 _redis_service: Optional[RedisService] = None
