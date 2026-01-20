@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'analyses.apps.AnalysesConfig',
     'fittings.apps.FittingsConfig',
     'orders.apps.OrdersConfig',
+    'agents.apps.AgentsConfig',
 ]
 
 # Custom User Model
@@ -396,6 +397,11 @@ LOGGING = {
             'propagate': False,
         },
         'users': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'agents': {
             'handlers': _active_handlers,
             'level': 'INFO',
             'propagate': False,

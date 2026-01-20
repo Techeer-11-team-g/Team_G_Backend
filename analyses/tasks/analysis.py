@@ -34,7 +34,7 @@ from google.cloud import storage
 from services.vision_service import get_vision_service, DetectedItem
 from services.embedding_service import get_embedding_service
 from services.opensearch_client import OpenSearchService
-from services.redis_service import get_redis_service
+from services.redis_service import get_redis_service, RedisService
 from services.metrics import (
     ANALYSIS_TOTAL,
     ANALYSIS_DURATION,
@@ -239,7 +239,7 @@ def process_single_item(
             # 진행률 업데이트
             completed_key = f"analysis:{analysis_id}:completed"
             current = redis_service.get(completed_key) or "0"
-            redis_service.set(completed_key, str(int(current) + 1), ttl=3600)
+            redis_service.set(completed_key, str(int(current) + 1), ttl=RedisService.TTL_POLLING)
 
             logger.info(f"Analysis {analysis_id} item {item_index} processed")
             ctx.set("result.matches", len(result.get('matches', [])) if result else 0)
