@@ -17,9 +17,12 @@ class UploadedImage(models.Model):
         verbose_name='사용자 아이디',
     )
 
-    uploaded_image_url = models.ImageField(
-        upload_to='uploaded-images/%Y/%m/%d/',
+    uploaded_image_url = models.URLField(
+        max_length=1000,
+        blank=True,
+        null=True,
         verbose_name='업로드한 이미지 URL',
+        help_text='GCS에 저장된 원본 이미지 URL',
     )
 
     created_at = models.DateTimeField(
@@ -35,6 +38,12 @@ class UploadedImage(models.Model):
     is_deleted = models.BooleanField(
         default=False,
         verbose_name='삭제 여부',
+    )
+
+    is_public = models.BooleanField(
+        default=False,
+        verbose_name='공개 여부',
+        help_text='True이면 피드에 공개됨',
     )
 
     class Meta:
@@ -141,6 +150,14 @@ class DetectedObject(models.Model):
         max_length=100,
         verbose_name='객체 카테고리',
         help_text='검출된 객체의 카테고리 (상의, 하의, 신발 등)',
+    )
+
+    cropped_image_url = models.URLField(
+        max_length=1000,
+        blank=True,
+        null=True,
+        verbose_name='크롭 이미지 URL',
+        help_text='GCS에 저장된 크롭된 이미지 URL',
     )
 
     created_at = models.DateTimeField(

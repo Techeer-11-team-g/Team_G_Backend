@@ -5,6 +5,7 @@ AI 패션 어시스턴트 - 메인 오케스트레이터
 
 import json
 import logging
+import re
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -162,9 +163,27 @@ class MainOrchestrator:
         # 이미지 + 텍스트
         has_image = image is not None
 
+        # 이미지 + 피팅 요청: 특별 처리 (상품 검색 후 피팅 플로우)
+        if has_image and message:
+            message_lower = message.lower()
+            fitting_keywords = ["피팅", "입어", "착용", "가상피팅", "피팅해", "입혀"]
+            if any(kw in message_lower for kw in fitting_keywords):
+                return {
+                    "intent": "fitting",
+                    "sub_intent": "fitting_with_image",
+                    "has_image": True,
+                    "requires_context": False,
+                    "references": {"type": "none"}
+                }
+
         # 간단한 키워드 기반 분류 (기본)
         # 실제로는 LangChain Function Calling 사용
         intent_result = self._keyword_based_classification(message, has_image, context)
+
+        # pending_action 처리 중이면 LLM 덮어쓰기 방지
+        if intent_result.get('continue_pending'):
+            intent_result['has_image'] = has_image
+            return intent_result
 
         # LLM 기반 정교한 분류 시도
         try:
@@ -178,6 +197,28 @@ class MainOrchestrator:
         intent_result['has_image'] = has_image
         return intent_result
 
+    def _extract_category(self, message: str) -> Optional[str]:
+        """메시지에서 카테고리 추출"""
+        message_lower = message.lower()
+
+        # 카테고리 키워드 매핑
+        category_keywords = {
+            'shoes': ['신발', '구두', '운동화', '스니커즈', '부츠', '로퍼', '샌들', '슬리퍼', '하이힐', '플랫슈즈', '캔버스화'],
+            'top': ['상의', '티셔츠', '셔츠', '블라우스', '니트', '맨투맨', '후드', '반팔', '긴팔', '탑'],
+            'bottom': ['하의', '바지', '팬츠', '청바지', '데님', '슬랙스', '조거', '반바지', '숏팬츠'],
+            'outer': ['아우터', '자켓', '재킷', '코트', '점퍼', '패딩', '가디건', '집업', '야상', '트렌치'],
+            'bag': ['가방', '백', '토트백', '크로스백', '숄더백', '백팩', '클러치', '에코백'],
+            'hat': ['모자', '캡', '비니', '버킷햇', '베레모'],
+            'skirt': ['치마', '스커트', '미니스커트', '롱스커트', '플리츠'],
+            'dress': ['원피스', '드레스'],
+        }
+
+        for category, keywords in category_keywords.items():
+            if any(kw in message_lower for kw in keywords):
+                return category
+
+        return None
+
     def _keyword_based_classification(
         self,
         message: str,
@@ -187,13 +228,88 @@ class MainOrchestrator:
         """키워드 기반 Intent 분류 (폴백)"""
         message_lower = message.lower()
 
+        # 0. 대기 중인 액션 확인 (ask_size 이후 사이즈 선택 등)
+        pending = context.get('pending_action')
+        if pending:
+            pending_type = pending.get('type')
+
+            # ask_size 후 사이즈 선택 대기 중
+            size_patterns = [
+                r'(?<![A-Za-z])(XS|S|M|L|XL|XXL|XXXL|FREE)(?![A-Za-z])',
+                r'(\d{2,3})(?:\s*사이즈|\s*$|[^0-9])',  # 95, 100 등 + 사이즈 or 끝 or 비숫자
+            ]
+            has_size = any(
+                re.search(pattern, message, re.IGNORECASE)
+                for pattern in size_patterns
+            )
+
+            if pending_type == 'select_size_for_cart':
+                if has_size or "사이즈" in message_lower:
+                    return {
+                        "intent": "commerce",
+                        "sub_intent": "add_cart",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+
+            elif pending_type == 'select_size_for_direct_purchase':
+                if has_size or "사이즈" in message_lower:
+                    return {
+                        "intent": "commerce",
+                        "sub_intent": "direct_purchase",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+
+            # 피팅을 위한 상품 검색 확인 대기 중
+            elif pending_type == 'confirm_search_for_fitting':
+                confirm_keywords = ["응", "ㅇㅇ", "해줘", "찾아", "그래", "좋아", "네", "예"]
+                cancel_keywords = ["아니", "괜찮", "취소", "안해", "싫어"]
+                if any(kw in message_lower for kw in confirm_keywords):
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "confirm_search_for_fitting",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+                elif any(kw in message_lower for kw in cancel_keywords):
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "cancel_fitting",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+
+            # 피팅할 상품 선택 대기 중
+            elif pending_type == 'select_product_for_fitting':
+                # "다 해줘", "전부" -> batch_fit
+                if "다 " in message_lower or "전부" in message_lower or "모든" in message_lower or "다해" in message_lower:
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "batch_fit",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+                # "N번 해줘" -> single_fit
+                refs = self._extract_references(message)
+                if refs.get('type') == 'index' and refs.get('indices'):
+                    return {
+                        "intent": "fitting",
+                        "sub_intent": "single_fit",
+                        "references": refs,
+                        "continue_pending": True
+                    }
+
+        # 카테고리 추출
+        extracted_category = self._extract_category(message)
+
         # 1. 커머스 관련 (가장 구체적인 키워드, 먼저 체크)
         commerce_keywords = {
-            "add_cart": ["담아", "장바구니에 담", "카트에"],
-            "view_cart": ["장바구니 보", "장바구니 확인", "뭐 담", "담은 거", "장바구니에 뭐"],
-            "remove_cart": ["빼", "삭제", "제거", "비워"],
+            "add_cart": ["담아", "장바구니에 담", "카트에", "장바구니로", "번 장바구니", "담을래", "담기", "카트로"],
+            "view_cart": ["장바구니 보", "장바구니 확인", "뭐 담았", "담은 거", "장바구니에 뭐", "장바구니 열", "카트 보"],
+            "remove_cart": ["빼", "삭제", "제거", "비워", "장바구니에서"],
             "size_recommend": ["사이즈", "치수", "몇 사이즈"],
-            "checkout": ["주문", "구매", "결제", "살래", "살게"],
+            "checkout": ["주문", "구매", "결제", "살래", "살게", "계산"],
             "order_status": ["배송", "주문 내역", "주문 확인", "어디쯤"],
             "cancel_order": ["취소"]
         }
@@ -242,8 +358,34 @@ class MainOrchestrator:
                     "references": {"type": "none"}
                 }
 
-        # 4. Refine 확인 (이전 검색 결과가 있는 경우)
+        # 4. 다시 검색 (이전 검색을 반복)
+        if context.get('has_search_results') and context.get('last_search_query'):
+            retry_keywords = ["다시 검색", "다시 찾아", "한번 더", "다시 보여", "재검색"]
+            if any(kw in message_lower for kw in retry_keywords):
+                return {
+                    "intent": "search",
+                    "sub_intent": "retry_search",
+                    "references": {"type": "none"}
+                }
+
+        # 5. Refine 확인 (이전 검색 결과가 있는 경우)
         if context.get('has_search_results'):
+            # 5-1. 이미지 분석 결과에서 필터 변경 ("신발만", "코트만 보여줘" 등)
+            last_search_type = context.get('last_search_type')
+            if last_search_type == 'image':
+                # "~만" 패턴으로 필터 변경 의도 감지
+                filter_only_patterns = ["만 보여", "만 찾아", "만 볼래", "만 보고"]
+                if any(kw in message_lower for kw in filter_only_patterns):
+                    return {
+                        "intent": "search",
+                        "sub_intent": "refine",
+                        "search_params": {
+                            "target_categories": [extracted_category] if extracted_category else []
+                        },
+                        "references": {"type": "none"}
+                    }
+
+            # 5-2. 기존 refine 키워드 (텍스트 검색용)
             refine_keywords = ["다른", "대신", "말고", "색", "브랜드", "싸", "비싸", "없어", "더"]
             if any(kw in message_lower for kw in refine_keywords):
                 return {
@@ -260,11 +402,17 @@ class MainOrchestrator:
                 return {
                     "intent": "search",
                     "sub_intent": "cross_recommend",
+                    "search_params": {
+                        "target_categories": [extracted_category] if extracted_category else []
+                    },
                     "references": {"type": "none"}
                 }
             return {
                 "intent": "search",
                 "sub_intent": "new_search",
+                "search_params": {
+                    "target_categories": [extracted_category] if extracted_category else []
+                },
                 "references": {"type": "none"}
             }
 
@@ -272,13 +420,14 @@ class MainOrchestrator:
         return {
             "intent": "search",
             "sub_intent": "new_search",
+            "search_params": {
+                "target_categories": [extracted_category] if extracted_category else []
+            },
             "references": {"type": "none"}
         }
 
     def _extract_references(self, message: str) -> Dict[str, Any]:
         """참조 표현 추출"""
-        import re
-
         # 인덱스 참조
         index_pattern = r'(\d+)\s*번'
         indices = [int(m) for m in re.findall(index_pattern, message)]
@@ -306,29 +455,24 @@ class MainOrchestrator:
     ) -> Optional[Dict[str, Any]]:
         """LLM 기반 Intent 분류 (LangChain Function Calling)"""
         try:
-            # 기존 LangChainService의 Function Calling 활용
-            # parse_refine_query_v2와 유사한 방식
+            # LangChainService의 classify_intent 사용
+            llm_result = self.langchain.classify_intent(
+                message=message,
+                context={
+                    'has_search_results': context.get('has_search_results', False),
+                    'has_user_image': context.get('has_user_image', False),
+                    'cart_item_count': context.get('cart_item_count', 0),
+                }
+            )
 
-            system_prompt = """당신은 패션 쇼핑 어시스턴트입니다.
-사용자의 메시지를 분석하여 의도를 분류하세요.
+            if llm_result:
+                logger.info(
+                    f"LLM classified: {llm_result.get('intent')}/{llm_result.get('sub_intent')} "
+                    f"(confidence: {llm_result.get('confidence', 0):.2f})"
+                )
+                return llm_result
 
-가능한 의도:
-- search: 상품 검색 (new_search, refine, similar, cross_recommend)
-- fitting: 가상 피팅 (single_fit, batch_fit, compare_fit)
-- commerce: 구매 관련 (add_cart, view_cart, size_recommend, checkout, order_status)
-- general: 일반 대화 (greeting, help, feedback)
-
-참조 표현 유형:
-- index: 번호 참조 (1번, 2번)
-- temporal: 시간 참조 (이거, 아까, 처음)
-- attribute: 속성 참조 (빨간 거, 싼 거)
-- none: 참조 없음
-"""
-
-            # LangChain으로 분류 (실제 구현 시 Function Calling 사용)
-            # 여기서는 간소화
-
-            return None  # 키워드 기반 결과 사용
+            return None
 
         except Exception as e:
             logger.warning(f"LLM classification error: {e}")
@@ -355,7 +499,7 @@ class MainOrchestrator:
             return self.search_agent.handle(sub_intent, message, image, context)
 
         elif intent == 'fitting':
-            return self.fitting_agent.handle(sub_intent, context)
+            return self.fitting_agent.handle(sub_intent, context, image, message)
 
         elif intent == 'commerce':
             return self.commerce_agent.handle(sub_intent, message, context)
@@ -511,22 +655,62 @@ class MainOrchestrator:
             analysis = ImageAnalysis.objects.get(id=analysis_id)
 
             if analysis.image_analysis_status == 'DONE':
-                # 결과 가져오기
-                products = self.search_agent.get_analysis_results(analysis_id)
+                # 컨텍스트에서 카테고리/아이템타입 필터 확인
+                context = self._load_context()
+                category_filter = context.get('analysis_category_filter')
+                item_type_filter = context.get('analysis_item_type_filter')
+                is_fitting_flow = context.get('fitting_flow', False)
+
+                # 결과 가져오기 (카테고리/아이템타입 필터 적용)
+                products = self.search_agent.get_analysis_results(
+                    analysis_id,
+                    category_filter=category_filter,
+                    item_type_filter=item_type_filter
+                )
 
                 if products:
-                    context = self._load_context()
                     context['search_results'] = products
                     context['has_search_results'] = True
                     context['current_analysis_id'] = analysis_id
                     context['analysis_pending'] = False
+                    context['last_search_type'] = 'image'  # 이미지 검색 타입 저장
+                    # 보여준 상품 ID 저장 (재검색 시 제외용)
+                    shown_ids = [p.get('product_id') for p in products if p.get('product_id')]
+                    context['shown_product_ids'] = shown_ids
+
+                    # 피팅 플로우인 경우: 피팅할 상품 선택 요청
+                    if is_fitting_flow:
+                        context['pending_action'] = {
+                            'type': 'select_product_for_fitting',
+                            'analysis_id': analysis_id
+                        }
+                        context['fitting_flow'] = False  # 플로우 리셋
+                        self._save_context(context)
+                        return ResponseBuilder.ask_which_product_to_fit(products)
+
                     self._save_context(context)
 
-                    return ResponseBuilder.search_results(
-                        products,
-                        "이미지 분석이 완료됐어요! 찾은 상품이에요:"
-                    )
+                    # 필터 적용 여부에 따른 메시지
+                    filter_name = item_type_filter or category_filter
+                    if filter_name:
+                        message = f"이미지에서 {filter_name} 관련 상품을 찾았어요:"
+                    else:
+                        message = "이미지 분석이 완료됐어요! 찾은 상품이에요:"
+
+                    return ResponseBuilder.search_results(products, message)
                 else:
+                    # 피팅 플로우인 경우 리셋
+                    if is_fitting_flow:
+                        context['fitting_flow'] = False
+                        context['pending_action'] = None
+                        self._save_context(context)
+
+                    # 필터 적용했는데 결과 없으면 다른 메시지
+                    filter_name = item_type_filter or category_filter
+                    if filter_name:
+                        return ResponseBuilder.no_results(
+                            f"이미지에서 {filter_name} 상품을 찾지 못했어요. 다른 조건으로 시도해보세요."
+                        )
                     return ResponseBuilder.no_results(
                         "이미지에서 상품을 찾지 못했어요. 다른 이미지로 시도해주세요."
                     )

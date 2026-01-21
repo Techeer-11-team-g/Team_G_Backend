@@ -633,6 +633,240 @@ Respond in JSON format:
 
         return []
 
+    def classify_intent(
+        self,
+        message: str,
+        context: dict = None,
+    ) -> dict:
+        """
+        사용자 메시지의 의도를 분류 (Function Calling 사용).
+
+        Args:
+            message: 사용자 메시지
+            context: 세션 컨텍스트 (has_search_results, has_user_image 등)
+
+        Returns:
+            {
+                'intent': 'search' | 'fitting' | 'commerce' | 'general',
+                'sub_intent': str,
+                'search_params': {...},
+                'commerce_params': {...},
+                'references': {...},
+                'confidence': float
+            }
+        """
+        try:
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+            # 컨텍스트 정보 정리
+            ctx = context or {}
+            has_search_results = ctx.get('has_search_results', False)
+            has_user_image = ctx.get('has_user_image', False)
+            cart_count = ctx.get('cart_item_count', 0)
+
+            system_prompt = """당신은 한국어 패션 쇼핑 어시스턴트입니다.
+사용자 메시지의 의도를 정확하게 분류하세요.
+
+## 의도 분류 기준
+
+### search (상품 검색)
+- new_search: 새로운 검색 ("니트 찾아줘", "검은색 자켓 보여줘")
+- retry_search: 이전 검색 반복 ("다시 검색해줘", "한번 더 찾아줘")
+- refine: 검색 결과 조건 변경 또는 이미지 분석 결과 필터 변경
+  예1: "더 싼 거", "다른 색으로", "브랜드 바꿔줘" (텍스트 검색 조건 변경)
+  예2: "신발만 보여줘", "코트만 찾아줘", "상의만 볼래" (이미지 분석 필터 변경)
+- similar: 비슷한 상품 찾기 ("비슷한 거 더 보여줘")
+
+### fitting (가상 피팅)
+- single_fit: 단일 상품 피팅 ("1번 입어볼래", "이거 피팅해줘")
+- batch_fit: 여러 상품 피팅 ("다 입어봐", "전부 피팅")
+- compare_fit: 피팅 비교 ("1번이랑 2번 비교해줘")
+
+### commerce (구매/장바구니)
+- add_cart: 장바구니에만 담기 (결제 안함)
+  예: "1번 담아줘", "3번 장바구니에 넣어", "이거 담아", "저장해둬"
+- direct_purchase: 바로 구매 (사이즈 선택 → 결제) - "구매", "살래", "살게" 표현!
+  예: "1번 구매할래", "1번 살래", "이거 살게", "3번 구매", "1번 바로 주문"
+- view_cart: 장바구니 보기 ("장바구니 보여줘", "뭐 담았어?")
+- remove_cart: 장바구니 삭제 ("1번 빼줘", "장바구니 비워")
+- size_recommend: 사이즈 추천 ("사이즈 추천해줘", "내 사이즈 뭐야?")
+- checkout: 장바구니 전체 결제 - 번호 참조 없이!
+  예: "결제해줘", "장바구니 결제", "전부 주문해줘"
+
+### general (일반 대화)
+- greeting: 인사 ("안녕", "하이")
+- help: 도움 요청 ("뭐 할 수 있어?", "도와줘")
+- feedback: 피드백 ("고마워", "좋아")
+- unknown: 분류 불가
+
+## 참조 표현 파싱
+- index: 번호 참조 ("1번", "3번") → indices: [1], [3]
+- temporal: 시간 참조 ("이거", "아까 그거") → temporal: "current", "previous"
+- none: 참조 없음
+
+## 카테고리 추출
+메시지에서 패션 카테고리 키워드를 추출하세요:
+- shoes: 신발, 구두, 운동화, 스니커즈, 부츠, 로퍼, 샌들, 슬리퍼
+- top: 상의, 티셔츠, 셔츠, 니트, 맨투맨, 후드, 블라우스
+- bottom/pants: 하의, 바지, 청바지, 슬랙스, 조거팬츠
+- outer: 아우터, 자켓, 코트, 패딩, 가디건, 점퍼, 바람막이
+- bag: 가방, 백팩, 토트백, 크로스백
+- dress: 원피스, 드레스
+- skirt: 치마, 스커트
+
+## 아이템 타입 추출 (세부 분류)
+카테고리 내 세부 아이템 타입도 추출하세요:
+- outer 세부: coat(코트), padding(패딩), jacket(자켓/재킷), cardigan(가디건), jumper(점퍼/바람막이)
+- shoes 세부: sneakers(운동화/스니커즈), loafers(구두/로퍼), boots(부츠), sandals(샌들), slippers(슬리퍼)
+- top 세부: tshirt(티셔츠), shirt(셔츠), knit(니트), hoodie(후드/후드티), sweatshirt(맨투맨)
+- bottom 세부: jeans(청바지), slacks(슬랙스), jogger(조거팬츠), shorts(반바지)
+
+## 브랜드 추출
+메시지에서 브랜드명이 있으면 추출하세요 (영문 소문자로):
+- 나이키/nike → nike
+- 아디다스/adidas → adidas
+- 뉴발란스/new balance → newbalance
+- 자라/zara → zara
+- 유니클로/uniqlo → uniqlo
+- 무신사 스탠다드/musinsa standard → musinsastandard
+- 커버낫/covernat → covernat
+- 디스이즈네버댓/thisisneverthat → thisisneverthat
+- 기타 브랜드도 영문 소문자로 변환"""
+
+            user_content = f"""사용자 메시지: "{message}"
+
+현재 상태:
+- 검색 결과 있음: {has_search_results}
+- 사용자 이미지 있음: {has_user_image}
+- 장바구니 아이템: {cart_count}개
+
+분류 가이드:
+- "나이키 신발 찾아줘", "아디다스 운동화 보여줘" 처럼 브랜드+아이템을 검색하는 건 new_search입니다.
+- "신발만 보여줘", "상의만" 처럼 이전 결과에서 필터만 바꾸는 건 refine입니다.
+- 브랜드가 있으면 반드시 brand 필드에 추출하세요 (나이키→nike, 아디다스→adidas, 뉴발란스→newbalance)
+
+이 메시지의 의도를 분류해주세요."""
+
+            # Intent Classification 스키마
+            intent_schema = {
+                "name": "classify_user_intent",
+                "description": "사용자 메시지의 의도를 분류합니다",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "intent": {
+                            "type": "string",
+                            "enum": ["search", "fitting", "commerce", "general"],
+                            "description": "주요 의도"
+                        },
+                        "sub_intent": {
+                            "type": "string",
+                            "enum": [
+                                "new_search", "retry_search", "refine", "similar", "cross_recommend",
+                                "single_fit", "batch_fit", "compare_fit",
+                                "add_cart", "direct_purchase", "view_cart", "remove_cart", "size_recommend", "checkout",
+                                "greeting", "help", "feedback", "unknown"
+                            ],
+                            "description": "세부 의도"
+                        },
+                        "target_categories": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "대상 카테고리 목록 (shoes, top, bottom, outer, bag 등)"
+                        },
+                        "item_type": {
+                            "type": "string",
+                            "enum": ["coat", "padding", "jacket", "cardigan", "jumper",
+                                     "sneakers", "loafers", "boots", "sandals", "slippers",
+                                     "tshirt", "shirt", "knit", "hoodie", "sweatshirt",
+                                     "jeans", "slacks", "jogger", "shorts"],
+                            "description": "세부 아이템 타입 (코트→coat, 패딩→padding, 운동화→sneakers, 구두→loafers 등)"
+                        },
+                        "reference_type": {
+                            "type": "string",
+                            "enum": ["index", "temporal", "none"],
+                            "description": "참조 표현 유형"
+                        },
+                        "reference_indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "번호 참조 시 인덱스 목록"
+                        },
+                        "reference_temporal": {
+                            "type": "string",
+                            "enum": ["current", "last", "previous", "first"],
+                            "description": "시간 참조 유형"
+                        },
+                        "size": {
+                            "type": "string",
+                            "description": "사이즈 정보 (S, M, L, XL, 95, 100 등)"
+                        },
+                        "color": {
+                            "type": "string",
+                            "description": "색상 정보"
+                        },
+                        "brand": {
+                            "type": "string",
+                            "description": "브랜드명 (나이키, 아디다스, 자라, 유니클로 등)"
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "description": "분류 확신도 (0-1)"
+                        }
+                    },
+                    "required": ["intent", "sub_intent", "confidence"]
+                }
+            }
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                functions=[intent_schema],
+                function_call={"name": "classify_user_intent"},
+                temperature=0.1,
+            )
+
+            function_call = response.choices[0].message.function_call
+            if function_call and function_call.arguments:
+                result = json.loads(function_call.arguments)
+
+                # 결과 정규화
+                intent_result = {
+                    "intent": result.get("intent", "general"),
+                    "sub_intent": result.get("sub_intent", "unknown"),
+                    "search_params": {
+                        "target_categories": result.get("target_categories", []),
+                        "color": result.get("color"),
+                        "brand": result.get("brand"),
+                        "item_type": result.get("item_type"),  # 세부 아이템 타입
+                    },
+                    "commerce_params": {
+                        "size": result.get("size"),
+                    },
+                    "references": {
+                        "type": result.get("reference_type", "none"),
+                        "indices": result.get("reference_indices", []),
+                        "temporal": result.get("reference_temporal"),
+                    },
+                    "confidence": result.get("confidence", 0.5),
+                }
+
+                logger.info(
+                    f"LLM Intent Classification: {intent_result['intent']}/{intent_result['sub_intent']} "
+                    f"(confidence: {intent_result['confidence']:.2f})"
+                )
+
+                return intent_result
+
+        except Exception as e:
+            logger.error(f"Intent classification failed: {e}")
+
+        # 폴백: None 반환하여 키워드 기반 분류 사용
+        return None
+
 
 # =============================================================================
 # Convenience functions

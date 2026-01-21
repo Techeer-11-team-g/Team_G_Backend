@@ -31,23 +31,30 @@ class ResponseBuilder:
 
         text_lines.append("\n\n피팅해서 확인해볼까요?")
 
+        # 상품 데이터 구성 (bbox 있으면 이미지 분석 결과)
+        formatted_products = []
+        for i, p in enumerate(products[:5], 1):
+            product_data = {
+                "index": i,
+                "product_id": p.get('product_id') or p.get('id'),
+                "brand_name": p.get('brand_name', ''),
+                "product_name": p.get('product_name', ''),
+                "selling_price": p.get('selling_price', 0),
+                "image_url": p.get('product_image_url') or p.get('image_url', ''),
+                "product_url": p.get('product_url', ''),
+                "sizes": p.get('sizes', [])
+            }
+            # 이미지 분석 결과일 때만 bbox 포함
+            if p.get('bbox'):
+                product_data['bbox'] = p.get('bbox')
+                product_data['detected_object_id'] = p.get('detected_object_id')
+            formatted_products.append(product_data)
+
         return {
             "text": "".join(text_lines),
             "type": "search_results",
             "data": {
-                "products": [
-                    {
-                        "index": i,
-                        "product_id": p.get('product_id') or p.get('id'),
-                        "brand_name": p.get('brand_name', ''),
-                        "product_name": p.get('product_name', ''),
-                        "selling_price": p.get('selling_price', 0),
-                        "image_url": p.get('product_image_url') or p.get('image_url', ''),
-                        "product_url": p.get('product_url', ''),
-                        "sizes": p.get('sizes', [])
-                    }
-                    for i, p in enumerate(products[:5], 1)
-                ],
+                "products": formatted_products,
                 "total_count": len(products),
                 "understood_intent": understood_intent
             },
@@ -269,6 +276,23 @@ class ResponseBuilder:
         }
 
     @staticmethod
+    def invalid_size(requested_size: str, available_sizes: List[str]) -> Dict[str, Any]:
+        """존재하지 않는 사이즈 요청 시 응답"""
+        return {
+            "text": f"'{requested_size}' 사이즈는 해당 상품에 없어요.\n"
+                    f"선택 가능한 사이즈: {', '.join(available_sizes)}",
+            "type": "ask_size",
+            "data": {
+                "available_sizes": available_sizes,
+                "requested_size": requested_size
+            },
+            "suggestions": [
+                {"label": size, "action": f"size_{size}"}
+                for size in available_sizes[:5]
+            ]
+        }
+
+    @staticmethod
     def ask_body_info() -> Dict[str, Any]:
         """신체 정보 요청"""
         return {
@@ -383,6 +407,70 @@ class ResponseBuilder:
             "data": {
                 "analysis_id": analysis_id,
                 "status_url": f"/api/v1/analyses/{analysis_id}/status"
+            },
+            "suggestions": []
+        }
+
+    @staticmethod
+    def ask_search_for_fitting() -> Dict[str, Any]:
+        """피팅을 위한 상품 검색 확인"""
+        return {
+            "text": "가상피팅을 하기 위해선 상품 정보가 필요해요. 이미지에서 상품을 먼저 찾아볼까요?",
+            "type": "ask_confirm",
+            "data": {
+                "confirm_type": "search_for_fitting"
+            },
+            "suggestions": [
+                {"label": "응, 찾아줘", "action": "confirm_search"},
+                {"label": "아니, 괜찮아", "action": "cancel"}
+            ]
+        }
+
+    @staticmethod
+    def ask_which_product_to_fit(products: List[Dict]) -> Dict[str, Any]:
+        """피팅할 상품 선택 요청"""
+        text_lines = ["어떤 상품을 가상피팅 해볼까요?\n"]
+        for i, p in enumerate(products[:5], 1):
+            brand = p.get('brand_name', '') or ''
+            name = p.get('product_name', '') or ''
+            display_name = f"{brand} {name}".strip() or f"상품 {i}"
+            text_lines.append(f"\n{i}. {display_name}")
+
+        text_lines.append("\n\n\"다 해줘\" 또는 \"1번 해줘\"처럼 말씀해주세요!")
+
+        formatted_products = []
+        for i, p in enumerate(products[:5], 1):
+            formatted_products.append({
+                "index": i,
+                "product_id": p.get('product_id') or p.get('id'),
+                "brand_name": p.get('brand_name', ''),
+                "product_name": p.get('product_name', ''),
+                "image_url": p.get('product_image_url') or p.get('image_url', ''),
+            })
+
+        return {
+            "text": "".join(text_lines),
+            "type": "ask_product_for_fitting",
+            "data": {
+                "products": formatted_products
+            },
+            "suggestions": [
+                {"label": "다 해줘", "action": "batch_fit"},
+                {"label": "1번 해줘", "action": "fit_1"},
+                {"label": "2번 해줘", "action": "fit_2"}
+            ]
+        }
+
+    @staticmethod
+    def analysis_pending_for_fitting(analysis_id: int) -> Dict[str, Any]:
+        """피팅을 위한 이미지 분석 대기 중"""
+        return {
+            "text": "이미지를 분석 중이에요... 완료되면 피팅할 상품을 선택할 수 있어요!",
+            "type": "analysis_pending_for_fitting",
+            "data": {
+                "analysis_id": analysis_id,
+                "status_url": f"/api/v1/analyses/{analysis_id}/status",
+                "next_action": "select_product_for_fitting"
             },
             "suggestions": []
         }

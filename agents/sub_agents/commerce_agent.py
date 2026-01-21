@@ -59,6 +59,9 @@ class CommerceAgent:
             if sub_intent == 'add_cart':
                 return self.add_to_cart(message, context)
 
+            elif sub_intent == 'direct_purchase':
+                return self.direct_purchase(message, context)
+
             elif sub_intent == 'view_cart':
                 return self.view_cart()
 
@@ -108,19 +111,47 @@ class CommerceAgent:
         from analyses.models import SelectedProduct
         from products.models import SizeCode
 
-        # 1. 상품 선택
-        selected = context.get('selected_product')
+        # pending_action 확인 (사이즈 선택 대기 중일 경우)
+        pending = context.get('pending_action')
+        if pending and pending.get('type') == 'select_size_for_cart':
+            # pending_action에서 상품 정보 가져오기
+            selected = pending.get('product')
+            product_id = pending.get('local_product_id')
+
+            if not selected or not product_id:
+                # pending data가 불완전하면 초기화
+                context.pop('pending_action', None)
+            else:
+                # 사이즈 파싱 시도
+                size = self._parse_size(message)
+                if size:
+                    # pending_action 완료, 클리어
+                    context.pop('pending_action', None)
+                    # 아래 로직으로 진행 (product_id, selected 설정됨)
+                    return self._complete_add_to_cart(
+                        selected, product_id, size, message, context
+                    )
+
+        # 1. 상품 선택 - 인덱스 참조 또는 상품명으로 선택!
+        refs = context.get('intent_result', {}).get('references', {})
+        indices = refs.get('indices', [])
+        products = context.get('search_results', [])
+
+        selected = None
+
+        # 1-1. 인덱스 참조가 있으면 검색 결과에서 선택 (우선순위!)
+        if indices and products and indices[0] <= len(products):
+            selected = products[indices[0] - 1]
+        # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
+        elif not indices and products:
+            selected = self._find_product_by_name(message, products)
+        # 1-3. 그래도 없으면 이전 선택 상품 사용
         if not selected:
-            products = context.get('search_results', [])
+            selected = context.get('selected_product')
+
+        if not selected:
             if not products:
                 return ResponseBuilder.ask_search_first()
-
-            # 인덱스 참조 확인
-            refs = context.get('intent_result', {}).get('references', {})
-            indices = refs.get('indices', [])
-
-            if indices and indices[0] <= len(products):
-                selected = products[indices[0] - 1]
             elif len(products) == 1:
                 selected = products[0]
             else:
@@ -147,7 +178,13 @@ class CommerceAgent:
 
         # 사이즈가 없으면 요청
         if not size:
-            sizes = selected.get('sizes', [])
+            sizes_data = selected.get('sizes', [])
+            # sizes가 dict 리스트인 경우 size 값만 추출
+            if sizes_data and isinstance(sizes_data[0], dict):
+                sizes = [s.get('size') for s in sizes_data if s.get('size')]
+            else:
+                sizes = sizes_data
+
             if not sizes:
                 # SizeCode에서 조회
                 sizes = list(SizeCode.objects.filter(
@@ -156,6 +193,14 @@ class CommerceAgent:
                 ).values_list('size_value', flat=True))
 
             if sizes:
+                # 컨텍스트에 pending_action 설정 (다음 메시지에서 사이즈 선택 처리)
+                context['pending_action'] = {
+                    'type': 'select_size_for_cart',
+                    'product': selected,
+                    'local_product_id': product_id,
+                    'available_sizes': sizes
+                }
+                context['selected_product'] = selected
                 return ResponseBuilder.ask_size(
                     f"{selected.get('product_name', '상품')}의 사이즈를 선택해주세요:",
                     sizes
@@ -200,6 +245,206 @@ class CommerceAgent:
         context['selected_size'] = size
 
         return ResponseBuilder.cart_added(selected, size, cart_item.quantity)
+
+    @traced("commerce_agent.direct_purchase")
+    def direct_purchase(
+        self,
+        message: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        바로 구매 - 사이즈 선택 후 즉시 결제
+
+        플로우: 상품 선택 → 사이즈 선택 → 장바구니 담기 → 바로 결제
+        """
+        from orders.models import CartItem
+        from analyses.models import SelectedProduct
+        from products.models import SizeCode
+
+        # pending_action 확인 (사이즈 선택 대기 중일 경우)
+        pending = context.get('pending_action')
+        if pending and pending.get('type') == 'select_size_for_direct_purchase':
+            selected = pending.get('product')
+            product_id = pending.get('local_product_id')
+
+            if not selected or not product_id:
+                context.pop('pending_action', None)
+            else:
+                size = self._parse_size(message)
+                if size:
+                    context.pop('pending_action', None)
+                    # 장바구니에 담고 바로 결제
+                    return self._complete_direct_purchase(
+                        selected, product_id, size, message, context
+                    )
+
+        # 1. 상품 선택 - 인덱스 참조 또는 상품명으로 선택!
+        refs = context.get('intent_result', {}).get('references', {})
+        indices = refs.get('indices', [])
+        products = context.get('search_results', [])
+
+        selected = None
+
+        # 1-1. 인덱스 참조가 있으면 검색 결과에서 선택 (우선순위!)
+        if indices and products and indices[0] <= len(products):
+            selected = products[indices[0] - 1]
+        # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
+        elif not indices and products:
+            selected = self._find_product_by_name(message, products)
+        # 1-3. 그래도 없으면 이전 선택 상품 사용
+        if not selected:
+            selected = context.get('selected_product')
+
+        if not selected:
+            if not products:
+                return ResponseBuilder.ask_search_first()
+            elif len(products) == 1:
+                selected = products[0]
+            else:
+                return ResponseBuilder.ask_selection(
+                    "어떤 상품을 구매하시겠어요?",
+                    products
+                )
+
+        # 2. 로컬 Product 조회
+        local_product = self._resolve_product(selected)
+        if not local_product:
+            return ResponseBuilder.error(
+                "product_not_found",
+                "해당 상품 정보를 찾을 수 없어요. 다른 상품을 선택해주세요."
+            )
+
+        product_id = local_product.id
+
+        # 3. 사이즈 파싱
+        size = self._parse_size(message)
+        commerce_params = context.get('intent_result', {}).get('commerce_params', {})
+        if not size:
+            size = commerce_params.get('size')
+
+        # 사이즈가 없으면 요청
+        if not size:
+            sizes_data = selected.get('sizes', [])
+            # sizes가 dict 리스트인 경우 size 값만 추출
+            if sizes_data and isinstance(sizes_data[0], dict):
+                sizes = [s.get('size') for s in sizes_data if s.get('size')]
+            else:
+                sizes = sizes_data
+
+            if not sizes:
+                sizes = list(SizeCode.objects.filter(
+                    product_id=product_id,
+                    is_deleted=False
+                ).values_list('size_value', flat=True))
+
+            if sizes:
+                # direct_purchase용 pending_action 설정
+                context['pending_action'] = {
+                    'type': 'select_size_for_direct_purchase',
+                    'product': selected,
+                    'local_product_id': product_id,
+                    'available_sizes': sizes
+                }
+                context['selected_product'] = selected
+                return ResponseBuilder.ask_size(
+                    f"{selected.get('product_name', '상품')}의 사이즈를 선택해주세요:",
+                    sizes
+                )
+            else:
+                size = 'FREE'
+
+        # 사이즈 있으면 바로 구매 진행
+        return self._complete_direct_purchase(
+            selected, product_id, size, message, context
+        )
+
+    def _complete_direct_purchase(
+        self,
+        selected: Dict[str, Any],
+        product_id: int,
+        size: str,
+        message: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """바로 구매 완료 - 장바구니 담기 + 즉시 결제"""
+        from orders.models import CartItem, Order, OrderItem
+        from analyses.models import SelectedProduct
+        from products.models import SizeCode, Product
+        from users.models import User
+
+        # 1. SizeCode 조회
+        size_code = SizeCode.objects.filter(
+            product_id=product_id,
+            size_value=size,
+            is_deleted=False
+        ).first()
+
+        # 2. SelectedProduct 생성/조회
+        selected_product, _ = SelectedProduct.objects.get_or_create(
+            product_id=product_id,
+            size_code=size_code,
+            defaults={'selected_product_inventory': 0}
+        )
+
+        # 3. Product 정보 조회
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            return ResponseBuilder.error(
+                "product_not_found",
+                "상품 정보를 찾을 수 없어요."
+            )
+
+        # 4. 사용자 정보
+        try:
+            user = User.objects.get(id=self.user_id)
+        except User.DoesNotExist:
+            return ResponseBuilder.error(
+                "user_not_found",
+                "사용자 정보를 찾을 수 없어요."
+            )
+
+        # 5. 바로 주문 생성 (장바구니 스킵)
+        quantity = 1
+        total_price = product.selling_price * quantity
+
+        with transaction.atomic():
+            order = Order.objects.create(
+                user=user,
+                total_price=total_price,
+                delivery_address=user.address or '배송지를 입력해주세요'
+            )
+
+            OrderItem.objects.create(
+                order=order,
+                selected_product=selected_product,
+                purchased_quantity=quantity,
+                price_at_order=product.selling_price,
+                order_status='PENDING'
+            )
+
+        # 컨텍스트 정리
+        context.pop('pending_action', None)
+        context.pop('selected_product', None)
+
+        return {
+            "text": f"🎉 주문이 완료되었어요!\n\n"
+                    f"📦 {selected.get('product_name', product.product_name)}\n"
+                    f"📐 사이즈: {size}\n"
+                    f"💰 결제 금액: ₩{total_price:,}\n\n"
+                    f"주문번호: #{order.id}",
+            "type": "order_created",
+            "data": {
+                "order_id": order.id,
+                "product": selected,
+                "size": size,
+                "total_price": total_price
+            },
+            "suggestions": [
+                {"label": "주문 내역 보기", "action": "order_status"},
+                {"label": "쇼핑 계속하기", "action": "search"}
+            ]
+        }
 
     @traced("commerce_agent.view_cart")
     def view_cart(self) -> Dict[str, Any]:
@@ -588,11 +833,86 @@ class CommerceAgent:
 
     # ============ Helper Methods ============
 
+    def _complete_add_to_cart(
+        self,
+        selected: Dict[str, Any],
+        product_id: int,
+        size: str,
+        message: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """장바구니 추가 완료 (사이즈 선택 후)"""
+        from orders.models import CartItem
+        from analyses.models import SelectedProduct
+        from products.models import SizeCode
+
+        # 수량 파싱 및 검증
+        quantity = self._parse_quantity(message)
+        if not quantity:
+            quantity = 1
+        quantity = max(1, min(99, quantity))
+
+        # SizeCode 조회
+        size_code = SizeCode.objects.filter(
+            product_id=product_id,
+            size_value=size,
+            is_deleted=False
+        ).first()
+
+        # 사이즈 검증: 해당 상품에 존재하는 사이즈인지 확인
+        if not size_code:
+            # 해당 상품의 가용 사이즈 조회
+            available_sizes = list(SizeCode.objects.filter(
+                product_id=product_id,
+                is_deleted=False
+            ).values_list('size_value', flat=True))
+
+            if available_sizes:
+                # 사이즈 선택 다시 요청
+                context['pending_action'] = {
+                    'type': 'select_size_for_cart',
+                    'product': selected,
+                    'local_product_id': product_id,
+                    'available_sizes': available_sizes
+                }
+                return ResponseBuilder.invalid_size(size, available_sizes)
+            else:
+                # 사이즈 정보가 없으면 FREE로 처리
+                size = 'FREE'
+                size_code = None
+
+        # SelectedProduct 생성/조회
+        selected_product, _ = SelectedProduct.objects.get_or_create(
+            product_id=product_id,
+            size_code=size_code,
+            defaults={'selected_product_inventory': 0}
+        )
+
+        # CartItem 생성/업데이트
+        cart_item, created = CartItem.objects.get_or_create(
+            user_id=self.user_id,
+            selected_product=selected_product,
+            is_deleted=False,
+            defaults={'quantity': quantity}
+        )
+        if not created:
+            cart_item.quantity += quantity
+            cart_item.save()
+
+        # 컨텍스트 업데이트
+        context['selected_product'] = selected
+        context['selected_size'] = size
+        # pending_action 클리어 확인
+        context.pop('pending_action', None)
+
+        return ResponseBuilder.cart_added(selected, size, cart_item.quantity)
+
     def _parse_size(self, message: str) -> Optional[str]:
         """메시지에서 사이즈 추출"""
+        # 한글 바로 뒤에 오는 숫자/문자도 매칭되도록 word boundary 대신 lookahead/lookbehind 사용
         size_patterns = [
-            r'\b(XS|S|M|L|XL|XXL|XXXL|FREE)\b',
-            r'\b(\d{2,3})\b',  # 95, 100, 105 등
+            r'(?<![A-Za-z])(XS|S|M|L|XL|XXL|XXXL|FREE)(?![A-Za-z])',
+            r'(\d{2,3})(?:\s*사이즈|\s*$|[^0-9])',  # 95, 100 등 + 사이즈 or 끝 or 비숫자
             r'(\d+)인치',
         ]
 
@@ -666,3 +986,52 @@ class CommerceAgent:
                 return 'L'
             else:
                 return 'XL'
+
+    def _find_product_by_name(
+        self,
+        message: str,
+        products: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        메시지에서 상품명 또는 브랜드명 일부로 상품 검색
+
+        Args:
+            message: 사용자 메시지
+            products: 검색 결과 상품 리스트
+
+        Returns:
+            매칭된 상품 또는 None
+        """
+        if not products:
+            return None
+
+        message_lower = message.lower()
+        # 불용어 제거
+        stopwords = ['담아', '담아줘', '주문', '구매', '사줘', '살래', '살게', '장바구니', '카트', '피팅', '입어', '입어봐', '해줘', '보여줘', '줘', '좀', '것', '거', '이거', '그거', '저거']
+        words = message_lower.split()
+        search_words = [w for w in words if w not in stopwords and len(w) >= 2]
+
+        if not search_words:
+            return None
+
+        # 각 상품에 대해 매칭 점수 계산
+        best_match = None
+        best_score = 0
+
+        for product in products:
+            product_name = (product.get('product_name') or '').lower()
+            brand_name = (product.get('brand_name') or '').lower()
+
+            score = 0
+            for word in search_words:
+                if word in product_name:
+                    score += 2  # 상품명 매칭 가중치 높음
+                if word in brand_name:
+                    score += 1  # 브랜드명 매칭
+
+            if score > best_score:
+                best_score = score
+                best_match = product
+
+        # 최소 1점 이상 매칭되어야 반환
+        return best_match if best_score >= 1 else None

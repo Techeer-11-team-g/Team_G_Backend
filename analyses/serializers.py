@@ -583,3 +583,116 @@ class UploadedImageHistoryResponseSerializer(serializers.Serializer):
 
     def get_items(self, obj):
         return HistoryItemSerializer(self.detected_objects, many=True).data
+
+
+# =============================================================================
+# Feed Serializers (Pinterest 스타일 피드용)
+# =============================================================================
+
+class FeedUserSerializer(serializers.Serializer):
+    """피드 아이템의 사용자 정보 Serializer."""
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+
+
+class FeedDetectedObjectSerializer(serializers.Serializer):
+    """피드용 검출 객체 Serializer (바로 구매 가능하도록 bbox, sizes 포함)."""
+    id = serializers.IntegerField()
+    category = serializers.CharField(source='object_category')
+    cropped_image_url = serializers.CharField(allow_null=True, required=False)
+    bbox = serializers.SerializerMethodField()
+    matched_product = serializers.SerializerMethodField()
+
+    def get_bbox(self, obj):
+        """bbox 좌표 반환."""
+        return {
+            'x1': round(obj.bbox_x1, 4),
+            'y1': round(obj.bbox_y1, 4),
+            'x2': round(obj.bbox_x2, 4),
+            'y2': round(obj.bbox_y2, 4),
+        }
+
+    def get_matched_product(self, obj):
+        """매칭된 상품 정보 + 사이즈 목록 반환."""
+        from products.models import SizeCode
+
+        # prefetch된 데이터 사용
+        mappings = getattr(obj, '_prefetched_objects_cache', {}).get('product_mappings')
+        if mappings is not None:
+            valid_mappings = [m for m in mappings if not m.is_deleted]
+            if valid_mappings:
+                best = max(valid_mappings, key=lambda m: m.confidence_score)
+                product = best.product
+                return self._build_product_data(product)
+        else:
+            mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
+            if mapping:
+                return self._build_product_data(mapping.product)
+        return None
+
+    def _build_product_data(self, product):
+        """상품 데이터 + 사이즈 목록 구성 (바로 구매 가능하도록 size_code_id 포함)."""
+        from products.models import SizeCode
+
+        # 사이즈 목록 조회 (size_code_id 포함)
+        size_codes = SizeCode.objects.filter(
+            product=product,
+            is_deleted=False
+        ).values('id', 'size_value')
+
+        sizes = [
+            {
+                'size_code_id': sc['id'],
+                'size_value': sc['size_value'],
+            }
+            for sc in size_codes
+        ]
+
+        return {
+            'id': product.id,
+            'brand_name': product.brand_name,
+            'product_name': product.product_name,
+            'selling_price': product.selling_price,
+            'image_url': product.product_image_url,
+            'product_url': product.product_url,
+            'sizes': sizes,
+        }
+
+
+class FeedItemSerializer(serializers.ModelSerializer):
+    """피드 아이템 Serializer (업로드 이미지 + 검출 객체들)."""
+    user = serializers.SerializerMethodField()
+    detected_objects = serializers.SerializerMethodField()
+    analysis_status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UploadedImage
+        fields = ['id', 'uploaded_image_url', 'user', 'created_at', 'is_public', 'detected_objects', 'analysis_status']
+
+    def get_user(self, obj):
+        if obj.user:
+            return {
+                'id': obj.user.id,
+                'username': obj.user.username,
+            }
+        return None
+
+    def get_analysis_status(self, obj):
+        """분석 상태 반환."""
+        analysis = getattr(obj, '_prefetched_analysis', None)
+        if analysis is None:
+            analysis = obj.analyses.filter(is_deleted=False).order_by('-created_at').first()
+        if analysis:
+            return analysis.image_analysis_status
+        return None
+
+    def get_detected_objects(self, obj):
+        """검출된 객체들 반환."""
+        # prefetch된 detected_objects 사용
+        detected_objects = getattr(obj, '_prefetched_detected_objects', None)
+        if detected_objects is None:
+            detected_objects = DetectedObject.objects.filter(
+                uploaded_image=obj,
+                is_deleted=False
+            ).prefetch_related('product_mappings', 'product_mappings__product')
+        return FeedDetectedObjectSerializer(detected_objects, many=True).data

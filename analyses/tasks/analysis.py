@@ -21,6 +21,7 @@ Pipeline:
 """
 
 import io
+import os
 import base64
 import logging
 from datetime import datetime
@@ -114,6 +115,38 @@ def process_image_analysis(
                     image_bytes = base64.b64decode(image_b64)
                     span.set("image.size_bytes", len(image_bytes))
                     logger.info(f"Using direct image bytes ({len(image_bytes)} bytes)")
+
+                # Step 1.5: Upload original image to GCS and update UploadedImage URL
+                with create_span(TRACER_NAME, "1.5_upload_original_to_gcs") as span:
+                    span.set("service", "google_cloud_storage")
+                    try:
+                        from analyses.models import ImageAnalysis
+                        from google.cloud import storage
+                        import uuid
+
+                        analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
+                        uploaded_image = analysis.uploaded_image
+
+                        # GCS에 원본 이미지 업로드
+                        if uploaded_image and not uploaded_image.uploaded_image_url:
+                            bucket_name = os.environ.get('GCS_BUCKET_NAME', 'team-g-bucket')
+                            unique_filename = f"uploaded-images/{analysis_id}/{uuid.uuid4().hex}.jpg"
+
+                            client = storage.Client()
+                            bucket = client.bucket(bucket_name)
+                            blob = bucket.blob(unique_filename)
+                            blob.upload_from_string(image_bytes, content_type='image/jpeg')
+
+                            # Public URL 생성
+                            gcs_url = f"https://storage.googleapis.com/{bucket_name}/{unique_filename}"
+                            uploaded_image.uploaded_image_url = gcs_url
+                            uploaded_image.save(update_fields=['uploaded_image_url'])
+
+                            span.set("uploaded_image.url", gcs_url[:100])
+                            logger.info(f"Uploaded original image to GCS: {gcs_url}")
+                    except Exception as e:
+                        logger.warning(f"Failed to upload original image to GCS: {e}")
+                        span.set("upload_error", str(e))
             else:
                 with create_span(TRACER_NAME, "1_download_image_gcs") as span:
                     span.set("service", "google_cloud_storage")
@@ -770,6 +803,7 @@ def _save_analysis_results(
                 bbox_y1=normalized_bbox['y1'],
                 bbox_x2=normalized_bbox['x2'],
                 bbox_y2=normalized_bbox['y2'],
+                cropped_image_url=result.get('cropped_image_url'),
             ))
 
         DetectedObject.objects.bulk_create(detected_objects_data)
