@@ -596,14 +596,26 @@ class FeedUserSerializer(serializers.Serializer):
 
 
 class FeedDetectedObjectSerializer(serializers.Serializer):
-    """피드용 검출 객체 Serializer (간소화 버전)."""
+    """피드용 검출 객체 Serializer (바로 구매 가능하도록 bbox, sizes 포함)."""
     id = serializers.IntegerField()
     category = serializers.CharField(source='object_category')
     cropped_image_url = serializers.CharField(allow_null=True, required=False)
+    bbox = serializers.SerializerMethodField()
     matched_product = serializers.SerializerMethodField()
 
+    def get_bbox(self, obj):
+        """bbox 좌표 반환."""
+        return {
+            'x1': round(obj.bbox_x1, 4),
+            'y1': round(obj.bbox_y1, 4),
+            'x2': round(obj.bbox_x2, 4),
+            'y2': round(obj.bbox_y2, 4),
+        }
+
     def get_matched_product(self, obj):
-        """매칭된 상품 정보 반환 (최상위 1개)."""
+        """매칭된 상품 정보 + 사이즈 목록 반환."""
+        from products.models import SizeCode
+
         # prefetch된 데이터 사용
         mappings = getattr(obj, '_prefetched_objects_cache', {}).get('product_mappings')
         if mappings is not None:
@@ -611,27 +623,32 @@ class FeedDetectedObjectSerializer(serializers.Serializer):
             if valid_mappings:
                 best = max(valid_mappings, key=lambda m: m.confidence_score)
                 product = best.product
-                return {
-                    'id': product.id,
-                    'brand_name': product.brand_name,
-                    'product_name': product.product_name,
-                    'selling_price': product.selling_price,
-                    'image_url': product.product_image_url,
-                    'product_url': product.product_url,
-                }
+                return self._build_product_data(product)
         else:
             mapping = obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
             if mapping:
-                product = mapping.product
-                return {
-                    'id': product.id,
-                    'brand_name': product.brand_name,
-                    'product_name': product.product_name,
-                    'selling_price': product.selling_price,
-                    'image_url': product.product_image_url,
-                    'product_url': product.product_url,
-                }
+                return self._build_product_data(mapping.product)
         return None
+
+    def _build_product_data(self, product):
+        """상품 데이터 + 사이즈 목록 구성."""
+        from products.models import SizeCode
+
+        # 사이즈 목록 조회
+        sizes = list(SizeCode.objects.filter(
+            product=product,
+            is_deleted=False
+        ).values_list('size_value', flat=True))
+
+        return {
+            'id': product.id,
+            'brand_name': product.brand_name,
+            'product_name': product.product_name,
+            'selling_price': product.selling_price,
+            'image_url': product.product_image_url,
+            'product_url': product.product_url,
+            'sizes': sizes,
+        }
 
 
 class FeedItemSerializer(serializers.ModelSerializer):
