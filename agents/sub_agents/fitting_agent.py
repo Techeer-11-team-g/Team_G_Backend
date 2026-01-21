@@ -5,10 +5,10 @@ AI 패션 어시스턴트 - 피팅 에이전트
 
 import logging
 import base64
-import re
 from typing import Dict, Any, Optional, List
 
 from agents.response_builder import ResponseBuilder
+from agents.utils import ProductMatcher
 from config.tracing import traced, get_tracer
 from products.models import Product
 
@@ -28,6 +28,12 @@ class FittingAgent:
 
     def __init__(self, user_id: int):
         self.user_id = user_id
+        # 피팅 컨텍스트용 ProductMatcher (피팅 불용어 활성화)
+        self._product_matcher = ProductMatcher(
+            include_commerce_stopwords=True,  # 커머스도 포함 (복합 요청 대응)
+            include_fitting_stopwords=True,
+            min_score_threshold=2  # 최소 2점 이상 매칭 필요
+        )
 
     @traced("fitting_agent.handle")
     def handle(
@@ -230,30 +236,19 @@ class FittingAgent:
         from fittings.tasks import process_fitting_task
 
         # 1. 선택된 상품 확인
-        selected = context.get('selected_product')
-        if not selected:
-            # 검색 결과에서 선택
-            products = context.get('search_results', [])
-            if len(products) == 1:
-                selected = products[0]
-            elif len(products) > 1:
-                # 1-1. 인덱스 참조 확인
-                refs = context.get('intent_result', {}).get('references', {})
-                indices = refs.get('indices', [])
-                # 유효한 인덱스 범위 확인 (1 ~ len(products))
-                if indices and 1 <= indices[0] <= len(products):
-                    selected = products[indices[0] - 1]
-                # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
-                elif message:
-                    selected = self._find_product_by_name(message, products)
+        products = context.get('search_results', [])
+        selected = self._select_product_from_context(message, context)
 
-                if not selected:
-                    return ResponseBuilder.ask_selection(
-                        "어떤 상품을 피팅해볼까요?",
-                        products
-                    )
-            else:
+        if not selected:
+            if not products:
                 return ResponseBuilder.ask_search_first()
+            elif len(products) == 1:
+                selected = products[0]
+            else:
+                return ResponseBuilder.ask_selection(
+                    "어떤 상품을 피팅해볼까요?",
+                    products
+                )
 
         # 2. 사용자 이미지
         user_image = context.get('user_image')
@@ -339,7 +334,7 @@ class FittingAgent:
                 products = context.get('search_results', [])[:5]
         # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
         elif message:
-            matched = self._find_products_by_name(message, products)
+            matched = self._product_matcher.find_all_matches(message, products, max_results=5)
             if matched:
                 products = matched
 
@@ -394,10 +389,11 @@ class FittingAgent:
         refs = context.get('intent_result', {}).get('references', {})
         indices = refs.get('indices', [])
         if len(indices) >= 2:
-            products = [products[i-1] for i in indices[:2] if i <= len(products)]
+            # 유효한 인덱스만 필터링 (1 ~ len(products))
+            products = [products[i-1] for i in indices[:2] if 1 <= i <= len(products)]
         # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
         elif message:
-            matched = self._find_products_by_name(message, products)
+            matched = self._product_matcher.find_all_matches(message, products, max_results=2)
             if len(matched) >= 2:
                 products = matched[:2]
             else:
@@ -445,96 +441,48 @@ class FittingAgent:
                 "피팅 정보를 찾을 수 없어요."
             )
 
-    def _find_product_by_name(
+    def _select_product_from_context(
         self,
         message: str,
-        products: List[Dict[str, Any]]
+        context: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """
-        메시지에서 상품명 또는 브랜드명 일부로 상품 검색
+        컨텍스트에서 상품 선택 (인덱스 > 상품명 매칭 > 이전 선택 순서)
+
+        우선순위:
+        1. 이전에 선택된 상품 (selected_product)
+        2. 인덱스 참조 (예: "1번 피팅해줘")
+        3. 상품명/브랜드명 매칭 (예: "나이키 셔츠 입어봐")
 
         Args:
             message: 사용자 메시지
-            products: 검색 결과 상품 리스트
+            context: 세션 컨텍스트
 
         Returns:
-            매칭된 상품 또는 None
+            선택된 상품 또는 None
         """
+        # 1. 이전에 선택된 상품 확인
+        selected = context.get('selected_product')
+        if selected:
+            return selected
+
+        products = context.get('search_results', [])
         if not products:
             return None
 
-        message_lower = message.lower()
-        # 불용어 제거
-        stopwords = ['피팅', '입어', '입어봐', '해줘', '보여줘', '줘', '좀', '것', '거', '이거', '그거', '저거', '착용', '가상피팅']
-        words = message_lower.split()
-        search_words = [w for w in words if w not in stopwords and len(w) >= 2]
+        # 2. 인덱스 참조 확인
+        refs = context.get('intent_result', {}).get('references', {})
+        indices = refs.get('indices', [])
 
-        if not search_words:
-            return None
+        # 인덱스 유효 범위: 1 ~ len(products)
+        if indices and 1 <= indices[0] <= len(products):
+            logger.debug(f"Product selected by index: {indices[0]}")
+            return products[indices[0] - 1]
 
-        # 각 상품에 대해 매칭 점수 계산
-        best_match = None
-        best_score = 0
+        # 3. 상품명/브랜드명으로 매칭 시도
+        if message:
+            matched = self._product_matcher.find_best_match(message, products)
+            if matched:
+                return matched
 
-        for product in products:
-            product_name = (product.get('product_name') or '').lower()
-            brand_name = (product.get('brand_name') or '').lower()
-
-            score = 0
-            for word in search_words:
-                if word in product_name:
-                    score += 2  # 상품명 매칭 가중치 높음
-                if word in brand_name:
-                    score += 1  # 브랜드명 매칭
-
-            if score > best_score:
-                best_score = score
-                best_match = product
-
-        # 최소 1점 이상 매칭되어야 반환
-        return best_match if best_score >= 1 else None
-
-    def _find_products_by_name(
-        self,
-        message: str,
-        products: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        메시지에서 상품명 또는 브랜드명 일부로 여러 상품 검색 (배치 피팅용)
-
-        Args:
-            message: 사용자 메시지
-            products: 검색 결과 상품 리스트
-
-        Returns:
-            매칭된 상품 리스트
-        """
-        if not products:
-            return []
-
-        message_lower = message.lower()
-        # 불용어 제거
-        stopwords = ['피팅', '입어', '입어봐', '해줘', '보여줘', '줘', '좀', '것', '거', '이거', '그거', '저거', '착용', '가상피팅', '다', '전부', '모든']
-        words = message_lower.split()
-        search_words = [w for w in words if w not in stopwords and len(w) >= 2]
-
-        if not search_words:
-            return []
-
-        # 매칭되는 모든 상품 반환
-        matched = []
-        for product in products:
-            product_name = (product.get('product_name') or '').lower()
-            brand_name = (product.get('brand_name') or '').lower()
-
-            score = 0
-            for word in search_words:
-                if word in product_name:
-                    score += 2
-                if word in brand_name:
-                    score += 1
-
-            if score >= 1:
-                matched.append(product)
-
-        return matched
+        return None
