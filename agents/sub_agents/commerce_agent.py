@@ -132,18 +132,21 @@ class CommerceAgent:
                         selected, product_id, size, message, context
                     )
 
-        # 1. 상품 선택 - 인덱스 참조가 있으면 검색 결과에서 선택!
+        # 1. 상품 선택 - 인덱스 참조 또는 상품명으로 선택!
         refs = context.get('intent_result', {}).get('references', {})
         indices = refs.get('indices', [])
         products = context.get('search_results', [])
 
         selected = None
 
-        # 인덱스 참조가 있으면 검색 결과에서 선택 (우선순위!)
+        # 1-1. 인덱스 참조가 있으면 검색 결과에서 선택 (우선순위!)
         if indices and products and indices[0] <= len(products):
             selected = products[indices[0] - 1]
-        elif not indices:
-            # 인덱스 없으면 이전 선택 상품 사용
+        # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
+        elif not indices and products:
+            selected = self._find_product_by_name(message, products)
+        # 1-3. 그래도 없으면 이전 선택 상품 사용
+        if not selected:
             selected = context.get('selected_product')
 
         if not selected:
@@ -275,18 +278,21 @@ class CommerceAgent:
                         selected, product_id, size, message, context
                     )
 
-        # 1. 상품 선택 - 인덱스 참조가 있으면 검색 결과에서 선택!
+        # 1. 상품 선택 - 인덱스 참조 또는 상품명으로 선택!
         refs = context.get('intent_result', {}).get('references', {})
         indices = refs.get('indices', [])
         products = context.get('search_results', [])
 
         selected = None
 
-        # 인덱스 참조가 있으면 검색 결과에서 선택 (우선순위!)
+        # 1-1. 인덱스 참조가 있으면 검색 결과에서 선택 (우선순위!)
         if indices and products and indices[0] <= len(products):
             selected = products[indices[0] - 1]
-        elif not indices:
-            # 인덱스 없으면 이전 선택 상품 사용
+        # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
+        elif not indices and products:
+            selected = self._find_product_by_name(message, products)
+        # 1-3. 그래도 없으면 이전 선택 상품 사용
+        if not selected:
             selected = context.get('selected_product')
 
         if not selected:
@@ -980,3 +986,52 @@ class CommerceAgent:
                 return 'L'
             else:
                 return 'XL'
+
+    def _find_product_by_name(
+        self,
+        message: str,
+        products: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        메시지에서 상품명 또는 브랜드명 일부로 상품 검색
+
+        Args:
+            message: 사용자 메시지
+            products: 검색 결과 상품 리스트
+
+        Returns:
+            매칭된 상품 또는 None
+        """
+        if not products:
+            return None
+
+        message_lower = message.lower()
+        # 불용어 제거
+        stopwords = ['담아', '담아줘', '주문', '구매', '사줘', '살래', '살게', '장바구니', '카트', '피팅', '입어', '입어봐', '해줘', '보여줘', '줘', '좀', '것', '거', '이거', '그거', '저거']
+        words = message_lower.split()
+        search_words = [w for w in words if w not in stopwords and len(w) >= 2]
+
+        if not search_words:
+            return None
+
+        # 각 상품에 대해 매칭 점수 계산
+        best_match = None
+        best_score = 0
+
+        for product in products:
+            product_name = (product.get('product_name') or '').lower()
+            brand_name = (product.get('brand_name') or '').lower()
+
+            score = 0
+            for word in search_words:
+                if word in product_name:
+                    score += 2  # 상품명 매칭 가중치 높음
+                if word in brand_name:
+                    score += 1  # 브랜드명 매칭
+
+            if score > best_score:
+                best_score = score
+                best_match = product
+
+        # 최소 1점 이상 매칭되어야 반환
+        return best_match if best_score >= 1 else None

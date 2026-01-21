@@ -631,14 +631,22 @@ class FeedDetectedObjectSerializer(serializers.Serializer):
         return None
 
     def _build_product_data(self, product):
-        """상품 데이터 + 사이즈 목록 구성."""
+        """상품 데이터 + 사이즈 목록 구성 (바로 구매 가능하도록 size_code_id 포함)."""
         from products.models import SizeCode
 
-        # 사이즈 목록 조회
-        sizes = list(SizeCode.objects.filter(
+        # 사이즈 목록 조회 (size_code_id 포함)
+        size_codes = SizeCode.objects.filter(
             product=product,
             is_deleted=False
-        ).values_list('size_value', flat=True))
+        ).values('id', 'size_value')
+
+        sizes = [
+            {
+                'size_code_id': sc['id'],
+                'size_value': sc['size_value'],
+            }
+            for sc in size_codes
+        ]
 
         return {
             'id': product.id,

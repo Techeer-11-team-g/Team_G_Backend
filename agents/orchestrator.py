@@ -499,7 +499,7 @@ class MainOrchestrator:
             return self.search_agent.handle(sub_intent, message, image, context)
 
         elif intent == 'fitting':
-            return self.fitting_agent.handle(sub_intent, context, image)
+            return self.fitting_agent.handle(sub_intent, context, image, message)
 
         elif intent == 'commerce':
             return self.commerce_agent.handle(sub_intent, message, context)

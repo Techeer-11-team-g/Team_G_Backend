@@ -5,6 +5,7 @@ AI 패션 어시스턴트 - 피팅 에이전트
 
 import logging
 import base64
+import re
 from typing import Dict, Any, Optional, List
 
 from agents.response_builder import ResponseBuilder
@@ -33,7 +34,8 @@ class FittingAgent:
         self,
         sub_intent: str,
         context: Dict[str, Any],
-        image: Optional[bytes] = None
+        image: Optional[bytes] = None,
+        message: str = ''
     ) -> Dict[str, Any]:
         """피팅 요청 처리"""
         try:
@@ -59,16 +61,16 @@ class FittingAgent:
                 return prereq_check
 
             if sub_intent == 'single_fit':
-                return self.single_fitting(context)
+                return self.single_fitting(context, message)
 
             elif sub_intent == 'batch_fit':
-                return self.batch_fitting(context)
+                return self.batch_fitting(context, message)
 
             elif sub_intent == 'compare_fit':
-                return self.compare_fitting(context)
+                return self.compare_fitting(context, message)
 
             else:
-                return self.single_fitting(context)
+                return self.single_fitting(context, message)
 
         except Exception as e:
             logger.error(f"FittingAgent error: {e}", exc_info=True)
@@ -215,11 +217,11 @@ class FittingAgent:
         ).first()
 
     @traced("fitting_agent.single_fitting")
-    def single_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def single_fitting(self, context: Dict[str, Any], message: str = '') -> Dict[str, Any]:
         """
         단일 피팅 - 기존 API 활용
 
-        1. 선택된 상품 확인 (또는 인덱스로 선택)
+        1. 선택된 상품 확인 (인덱스 또는 상품명으로 선택)
         2. 캐시 확인 (이미 피팅된 결과 있는지)
         3. 피팅 요청 (FittingImage 생성)
         4. Celery Task 실행 (process_fitting_task)
@@ -235,13 +237,17 @@ class FittingAgent:
             if len(products) == 1:
                 selected = products[0]
             elif len(products) > 1:
-                # 인덱스 참조 확인
+                # 1-1. 인덱스 참조 확인
                 refs = context.get('intent_result', {}).get('references', {})
                 indices = refs.get('indices', [])
                 # 유효한 인덱스 범위 확인 (1 ~ len(products))
                 if indices and 1 <= indices[0] <= len(products):
                     selected = products[indices[0] - 1]
-                else:
+                # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
+                elif message:
+                    selected = self._find_product_by_name(message, products)
+
+                if not selected:
                     return ResponseBuilder.ask_selection(
                         "어떤 상품을 피팅해볼까요?",
                         products
@@ -300,7 +306,7 @@ class FittingAgent:
         return ResponseBuilder.fitting_pending(fitting.id, selected)
 
     @traced("fitting_agent.batch_fitting")
-    def batch_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def batch_fitting(self, context: Dict[str, Any], message: str = '') -> Dict[str, Any]:
         """
         배치 피팅 - 여러 상품 동시 피팅
 
@@ -322,7 +328,7 @@ class FittingAgent:
             if not user_image:
                 return ResponseBuilder.ask_user_image()
 
-        # 인덱스 참조가 있으면 해당 상품만
+        # 1-1. 인덱스 참조가 있으면 해당 상품만
         refs = context.get('intent_result', {}).get('references', {})
         indices = refs.get('indices', [])
         if indices:
@@ -331,6 +337,11 @@ class FittingAgent:
             if not products:
                 # 모든 인덱스가 유효하지 않으면 원래 결과 사용
                 products = context.get('search_results', [])[:5]
+        # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
+        elif message:
+            matched = self._find_products_by_name(message, products)
+            if matched:
+                products = matched
 
         # 최대 5개까지 피팅
         products = products[:5]
@@ -369,7 +380,7 @@ class FittingAgent:
 
         return ResponseBuilder.batch_fitting_pending(fitting_ids, len(fitting_ids))
 
-    def compare_fitting(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def compare_fitting(self, context: Dict[str, Any], message: str = '') -> Dict[str, Any]:
         """비교 피팅 - 2개 상품 비교"""
         # 배치 피팅과 동일하지만 최대 2개
         products = context.get('search_results', [])
@@ -379,16 +390,23 @@ class FittingAgent:
                 "비교하려면 최소 2개 상품이 필요해요."
             )
 
-        # 인덱스 참조 확인
+        # 1-1. 인덱스 참조 확인
         refs = context.get('intent_result', {}).get('references', {})
         indices = refs.get('indices', [])
         if len(indices) >= 2:
             products = [products[i-1] for i in indices[:2] if i <= len(products)]
+        # 1-2. 인덱스 없으면 상품명/브랜드명으로 매칭 시도
+        elif message:
+            matched = self._find_products_by_name(message, products)
+            if len(matched) >= 2:
+                products = matched[:2]
+            else:
+                products = products[:2]
         else:
             products = products[:2]
 
         context['search_results'] = products
-        return self.batch_fitting(context)
+        return self.batch_fitting(context, message)
 
     def get_fitting_status(self, fitting_id: int) -> Dict[str, Any]:
         """피팅 상태 조회"""
@@ -426,3 +444,97 @@ class FittingAgent:
                 "fitting_not_found",
                 "피팅 정보를 찾을 수 없어요."
             )
+
+    def _find_product_by_name(
+        self,
+        message: str,
+        products: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        메시지에서 상품명 또는 브랜드명 일부로 상품 검색
+
+        Args:
+            message: 사용자 메시지
+            products: 검색 결과 상품 리스트
+
+        Returns:
+            매칭된 상품 또는 None
+        """
+        if not products:
+            return None
+
+        message_lower = message.lower()
+        # 불용어 제거
+        stopwords = ['피팅', '입어', '입어봐', '해줘', '보여줘', '줘', '좀', '것', '거', '이거', '그거', '저거', '착용', '가상피팅']
+        words = message_lower.split()
+        search_words = [w for w in words if w not in stopwords and len(w) >= 2]
+
+        if not search_words:
+            return None
+
+        # 각 상품에 대해 매칭 점수 계산
+        best_match = None
+        best_score = 0
+
+        for product in products:
+            product_name = (product.get('product_name') or '').lower()
+            brand_name = (product.get('brand_name') or '').lower()
+
+            score = 0
+            for word in search_words:
+                if word in product_name:
+                    score += 2  # 상품명 매칭 가중치 높음
+                if word in brand_name:
+                    score += 1  # 브랜드명 매칭
+
+            if score > best_score:
+                best_score = score
+                best_match = product
+
+        # 최소 1점 이상 매칭되어야 반환
+        return best_match if best_score >= 1 else None
+
+    def _find_products_by_name(
+        self,
+        message: str,
+        products: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        메시지에서 상품명 또는 브랜드명 일부로 여러 상품 검색 (배치 피팅용)
+
+        Args:
+            message: 사용자 메시지
+            products: 검색 결과 상품 리스트
+
+        Returns:
+            매칭된 상품 리스트
+        """
+        if not products:
+            return []
+
+        message_lower = message.lower()
+        # 불용어 제거
+        stopwords = ['피팅', '입어', '입어봐', '해줘', '보여줘', '줘', '좀', '것', '거', '이거', '그거', '저거', '착용', '가상피팅', '다', '전부', '모든']
+        words = message_lower.split()
+        search_words = [w for w in words if w not in stopwords and len(w) >= 2]
+
+        if not search_words:
+            return []
+
+        # 매칭되는 모든 상품 반환
+        matched = []
+        for product in products:
+            product_name = (product.get('product_name') or '').lower()
+            brand_name = (product.get('brand_name') or '').lower()
+
+            score = 0
+            for word in search_words:
+                if word in product_name:
+                    score += 2
+                if word in brand_name:
+                    score += 1
+
+            if score >= 1:
+                matched.append(product)
+
+        return matched
