@@ -22,21 +22,83 @@ Usage:
 import os
 import time
 import logging
+import psutil
 from contextlib import contextmanager
 from prometheus_client import Counter, Histogram, Gauge, push_to_gateway, REGISTRY
-from prometheus_client import ProcessCollector, PlatformCollector, REGISTRY as PROM_REGISTRY
 
 logger = logging.getLogger(__name__)
 
-# Process metrics collector 등록 (CPU, Memory 등)
-# django-prometheus가 자동으로 등록하지 않으므로 명시적으로 추가
-try:
-    ProcessCollector(registry=PROM_REGISTRY)
-    PlatformCollector(registry=PROM_REGISTRY)
-    logger.info("Process and Platform collectors registered")
-except ValueError:
-    # Already registered
-    pass
+
+# =============================================================================
+# Process/System Metrics (커스텀 구현)
+# =============================================================================
+
+PROCESS_CPU_PERCENT = Gauge(
+    'teamg_process_cpu_percent',
+    'CPU usage percentage of the Django process'
+)
+
+PROCESS_MEMORY_BYTES = Gauge(
+    'teamg_process_memory_bytes',
+    'Memory usage in bytes of the Django process',
+    ['type']  # rss, vms
+)
+
+PROCESS_OPEN_FDS = Gauge(
+    'teamg_process_open_fds',
+    'Number of open file descriptors'
+)
+
+SYSTEM_CPU_PERCENT = Gauge(
+    'teamg_system_cpu_percent',
+    'System-wide CPU usage percentage'
+)
+
+SYSTEM_MEMORY_PERCENT = Gauge(
+    'teamg_system_memory_percent',
+    'System-wide memory usage percentage'
+)
+
+SYSTEM_MEMORY_BYTES = Gauge(
+    'teamg_system_memory_bytes',
+    'System memory in bytes',
+    ['type']  # total, available, used
+)
+
+
+# 프로세스 객체를 캐싱하여 cpu_percent()가 정확한 값을 반환하도록 함
+_cached_process = None
+
+
+def update_process_metrics():
+    """프로세스 및 시스템 메트릭 업데이트"""
+    global _cached_process
+    try:
+        # 프로세스 객체 캐싱 (cpu_percent는 이전 호출과의 차이로 계산)
+        if _cached_process is None:
+            _cached_process = psutil.Process()
+            _cached_process.cpu_percent()  # 첫 호출로 초기화
+
+        # 현재 프로세스 메트릭
+        PROCESS_CPU_PERCENT.set(_cached_process.cpu_percent())
+        mem_info = _cached_process.memory_info()
+        PROCESS_MEMORY_BYTES.labels(type='rss').set(mem_info.rss)
+        PROCESS_MEMORY_BYTES.labels(type='vms').set(mem_info.vms)
+
+        try:
+            PROCESS_OPEN_FDS.set(_cached_process.num_fds())
+        except (AttributeError, psutil.Error):
+            pass  # Windows에서는 num_fds() 미지원
+
+        # 시스템 전체 메트릭
+        SYSTEM_CPU_PERCENT.set(psutil.cpu_percent())
+        mem = psutil.virtual_memory()
+        SYSTEM_MEMORY_PERCENT.set(mem.percent)
+        SYSTEM_MEMORY_BYTES.labels(type='total').set(mem.total)
+        SYSTEM_MEMORY_BYTES.labels(type='available').set(mem.available)
+        SYSTEM_MEMORY_BYTES.labels(type='used').set(mem.used)
+    except Exception as e:
+        logger.warning(f"Failed to update process metrics: {e}")
 
 # Pushgateway 설정 (Celery 워커용)
 PUSHGATEWAY_URL = os.getenv('PUSHGATEWAY_URL', 'localhost:9091')
@@ -156,6 +218,60 @@ PRODUCT_MATCHES_TOTAL = Counter(
     'teamg_product_matches_total',
     'Products matched to detected objects',
     ['category']
+)
+
+
+# =============================================================================
+# Chat/Agent Metrics
+# =============================================================================
+
+CHAT_MESSAGES_TOTAL = Counter(
+    'teamg_chat_messages_total',
+    'Total chat messages processed',
+    ['status']  # success, error
+)
+
+CHAT_INTENT_TOTAL = Counter(
+    'teamg_chat_intent_total',
+    'Chat intent classification counts',
+    ['intent', 'sub_intent']  # search/new_search, fitting/single_fit, commerce/add_cart
+)
+
+CHAT_AGENT_ROUTING_TOTAL = Counter(
+    'teamg_chat_agent_routing_total',
+    'Agent routing counts',
+    ['agent']  # search_agent, fitting_agent, commerce_agent
+)
+
+CHAT_SESSION_OPERATIONS_TOTAL = Counter(
+    'teamg_chat_session_operations_total',
+    'Session management operations',
+    ['operation']  # create, load, save, delete
+)
+
+CHAT_RESPONSE_DURATION = Histogram(
+    'teamg_chat_response_duration_seconds',
+    'Time to generate chat response',
+    ['intent'],
+    buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
+)
+
+
+# =============================================================================
+# HTTP API Metrics
+# =============================================================================
+
+HTTP_REQUEST_DURATION = Histogram(
+    'teamg_http_request_duration_seconds',
+    'HTTP request duration by endpoint and method',
+    ['method', 'endpoint', 'status_code'],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+)
+
+HTTP_REQUESTS_TOTAL = Counter(
+    'teamg_http_requests_total',
+    'Total HTTP requests by endpoint and status',
+    ['method', 'endpoint', 'status_code']
 )
 
 
