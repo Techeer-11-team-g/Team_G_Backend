@@ -16,7 +16,12 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # cAdvisor - local container metrics
+  # Node Exporter - Host metrics (CPU, Memory, Disk, Network)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # cAdvisor - Container metrics
   - job_name: 'cadvisor'
     static_configs:
       - targets: ['cadvisor:8080']

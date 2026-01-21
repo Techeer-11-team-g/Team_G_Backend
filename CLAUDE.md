@@ -101,6 +101,11 @@ Three named queues with routing in `config/celery.py`:
 - `analyses/` - Core image analysis pipeline
   - Models: UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping, SelectedProduct
   - Views: UploadedImageView, ImageAnalysisView
+- `agents/` - AI 패션 어시스턴트 챗봇 (LLM 기반)
+  - `orchestrator.py` - 메인 오케스트레이터: Intent Classification → Sub-Agent 라우팅
+  - `sub_agents/` - SearchAgent, FittingAgent, CommerceAgent
+  - `response_builder.py` - 응답 포맷 생성기
+  - `schemas.py` - Intent 분류 스키마 및 지원 카테고리
 - `fittings/` - Virtual fitting (UserImage, FittingImage with status caching)
 - `products/` - Product catalog (Product, SizeCode)
 - `orders/` - Order management (Order, OrderItem, CartItem with soft delete)
@@ -140,6 +145,11 @@ POST   /orders                   - Create order
 GET    /orders                   - List orders
 GET    /orders/<id>              - Get order details
 PATCH  /orders/<id>              - Update order status
+
+POST   /chat                     - AI 채팅 (메시지 + 이미지)
+POST   /chat/status              - 분석/피팅 상태 폴링
+GET    /chat/sessions/<id>       - 세션 조회
+DELETE /chat/sessions/<id>       - 세션 삭제
 
 POST   /auth/register            - User signup
 POST   /auth/login               - JWT token generation
@@ -249,3 +259,12 @@ Model is pre-loaded at Celery worker startup via `worker_process_init` signal in
 
 ### GCS Direct Upload Optimization
 When `auto_analyze=True`, base64-encoded images are passed directly to analysis tasks, skipping the GCS round-trip for faster processing.
+
+### AI Agent (Chat) Architecture
+`agents/orchestrator.py`의 MainOrchestrator가 메인 진입점:
+1. Intent Classification: 키워드 기반 + LLM Function Calling (LangChain)
+2. Sub-Agent 라우팅: SearchAgent, FittingAgent, CommerceAgent
+3. 세션 상태: Redis에 저장 (2시간 TTL, `agent:session:{id}` 키 패턴)
+4. 대화 이력: `agent:session:{id}:turns` 리스트 (최대 20턴)
+
+Intent 분류 우선순위: commerce → fitting → general → refine → search
