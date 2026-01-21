@@ -69,11 +69,40 @@ Service modules:
 - `vision_service.py` - Google Vision API wrapper with category normalization
 - `embedding_service.py` - Marqo-FashionCLIP 512-dim embeddings (Apple Silicon compatible with Float64)
 - `gpt4v_service.py` - Claude Vision for attribute extraction + ranking
-- `opensearch_client.py` - Vector search with k-NN (HNSW algorithm, cosine similarity)
+- `opensearch_client.py` - Thin wrapper re-exporting from `services/search/` (backward compatible)
 - `langchain_service.py` - LLM orchestration via LangChain
 - `fashn_service.py` - Virtual fitting integration
 - `redis_service.py` - Analysis state management (PENDING → RUNNING → DONE/FAILED)
-- `metrics.py` - Prometheus custom metrics
+- `metrics.py` - Prometheus custom metrics (process, system, business)
+
+### OpenSearch Search Module (`services/search/`)
+Modular search implementation split from monolithic `opensearch_client.py`:
+
+```python
+# Recommended: import from services/search/
+from services.search import OpenSearchService, get_client
+from services.search.strategies import SearchStrategies
+from services.search.utils import RELATED_CATEGORIES, COLOR_KEYWORDS
+
+# Backward compatible: old import path still works
+from services.opensearch_client import OpenSearchClient, get_client
+```
+
+Module structure:
+- `client.py` - Base OpenSearchClient class, connection management
+- `strategies.py` - 6 search strategies (k-NN, hybrid, attribute-based, etc.)
+- `utils.py` - Constants (RELATED_CATEGORIES, COLOR_KEYWORDS) and helpers
+
+### Common Utilities (`common/`)
+Shared utilities for pagination and serializer optimization:
+
+```python
+from common import StandardPagination, paginate_queryset
+from common import PrefetchMixin, DynamicFieldsMixin
+```
+
+- `pagination.py` - StandardPagination (page_size=20), CursorPaginationMixin
+- `serializers.py` - PrefetchMixin (auto setup_eager_loading), DynamicFieldsMixin
 
 ### Celery Task Pipeline (`analyses/tasks/`)
 Uses Celery Group/Chord pattern for parallel per-object processing:
@@ -213,10 +242,20 @@ POST /api/v1/analyses
 
 ### Metrics (Prometheus)
 Custom metrics in `services/metrics.py`:
+
+**Business metrics:**
 - `teamg_analysis_total{status}` - Analysis count by status
 - `teamg_analysis_duration_seconds{stage}` - Pipeline stage latency
 - `teamg_external_api_requests_total{service,status}` - External API calls
 - `teamg_fittings_requested_total{status}` - Fitting requests
+
+**Process/System metrics:**
+- `teamg_process_cpu_percent` - Django process CPU usage
+- `teamg_process_memory_bytes{type=rss|vms}` - Process memory
+- `teamg_system_cpu_percent` - System-wide CPU usage
+- `teamg_system_memory_bytes{type=total|available|used}` - System memory
+
+Call `update_process_metrics()` to refresh process metrics (auto-called by middleware).
 
 ### Logging (Loki)
 Structured JSON logs with custom `JsonFormatter`. Use `extra` dict for structured fields:
@@ -233,6 +272,8 @@ logger.info(
 ```
 
 `RequestLoggingMiddleware` (`config/middleware.py`) auto-logs all API requests/responses.
+
+`SkipHealthMetricsFilter` in `config/settings.py` filters noisy logs: `/health/`, `/metrics/`, Celery heartbeat messages.
 
 ### Health Check
 - `GET /health/` - Application health status
