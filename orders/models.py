@@ -2,7 +2,46 @@ from django.db import models
 from django.conf import settings
 
 
-class CartItem(models.Model):
+class SoftDeleteManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
+
+    def active(self):
+        return self.get_queryset()
+
+    def deleted(self):
+        return super().get_queryset().filter(is_deleted=True)
+
+
+class BaseSoftDeleteModel(models.Model):
+    is_deleted = models.BooleanField(
+        default=False,
+        verbose_name='삭제 여부',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='생성 일자',
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name='수정 일자',
+    )
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
+
+    class Meta:
+        abstract = True
+
+    def delete(self, using=None, keep_parents=False):
+        self.is_deleted = True
+        self.save(update_fields=['is_deleted', 'updated_at'])
+
+    def hard_delete(self, using=None, keep_parents=False):
+        super().delete(using=using, keep_parents=keep_parents)
+
+
+class CartItem(BaseSoftDeleteModel):
     """
     장바구니 항목 테이블
     ERD: cart_item
@@ -27,22 +66,7 @@ class CartItem(models.Model):
     quantity = models.PositiveIntegerField(
         default=1,
         verbose_name='수량',
-    )
-
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name='생성 일자',
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        verbose_name='수정 일자',
-    )
-
-    is_deleted = models.BooleanField(
-        default=False,
-        verbose_name='삭제 여부',
-    )
+    ) 
 
     class Meta:
         db_table = 'cart_item'
@@ -53,7 +77,7 @@ class CartItem(models.Model):
         return f"CartItem #{self.pk} - {self.user} / {self.selected_product}"
 
 
-class Order(models.Model):
+class Order(BaseSoftDeleteModel):
     """
     주문 테이블
     ERD: order
@@ -78,21 +102,6 @@ class Order(models.Model):
         verbose_name='배송 주소',
     ) 
 
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name='생성 일자',
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        verbose_name='수정 일자',
-    )
-
-    is_deleted = models.BooleanField(
-        default=False,
-        verbose_name='삭제 여부',
-    )
-
     class Meta:
         db_table = 'order'
         ordering = ['-created_at']
@@ -103,7 +112,7 @@ class Order(models.Model):
         return f"Order #{self.pk}"
 
 
-class OrderItem(models.Model):
+class OrderItem(BaseSoftDeleteModel):
     """
     주문 항목 테이블
     ERD: order_item
@@ -126,13 +135,13 @@ class OrderItem(models.Model):
         verbose_name='주문',
     )
 
-    product_item = models.ForeignKey(
+    selected_product = models.ForeignKey(
         'analyses.SelectedProduct',
         on_delete=models.SET_NULL,
         null=True,
         related_name='order_items',
-        db_column='product_item_id',
-        verbose_name='상품 아이템',
+        db_column='selected_product_id',
+        verbose_name='선택된 상품',
     )
 
     purchased_quantity = models.PositiveIntegerField(
@@ -150,23 +159,8 @@ class OrderItem(models.Model):
         max_length=20,
         choices=OrderStatus.choices,
         default=OrderStatus.PENDING,
-        verbose_name='주문 상태',
-    )
-
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name='생성 일자',
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        verbose_name='수정 일자',
-    )
-
-    is_deleted = models.BooleanField(
-        default=False,
-        verbose_name='삭제 여부',
-    )
+        verbose_name='주문 상태', 
+    ) 
 
     class Meta:
         db_table = 'order_item'
@@ -179,4 +173,4 @@ class OrderItem(models.Model):
     @property
     def subtotal(self):
         """해당 주문 항목의 소계"""
-        return self.price_at_order * self.purchased_quantity 
+        return self.price_at_order * self.purchased_quantity  

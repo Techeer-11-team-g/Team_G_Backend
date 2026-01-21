@@ -32,6 +32,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third party
     'rest_framework',
+    'drf_spectacular',
+    'rest_framework_simplejwt.token_blacklist',
     'django_prometheus',
     'storages',
     'corsheaders',
@@ -41,6 +43,7 @@ INSTALLED_APPS = [
     'analyses.apps.AnalysesConfig',
     'fittings.apps.FittingsConfig',
     'orders.apps.OrdersConfig',
+    'agents.apps.AgentsConfig',
 ]
 
 # Custom User Model
@@ -56,6 +59,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'config.middleware.RequestLoggingMiddleware',  # API 요청/응답 로깅
     'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
@@ -162,21 +166,18 @@ CACHES = {
 # =============================================================================
 
 # Broker - RabbitMQ (primary) or Redis (fallback)
-CELERY_BROKER_URL = os.getenv(
-    'CELERY_BROKER_URL',
-    f'amqp://{os.getenv("RABBITMQ_USER", "guest")}:{os.getenv("RABBITMQ_PASSWORD", "guest")}@{os.getenv("RABBITMQ_HOST", "localhost")}:{os.getenv("RABBITMQ_PORT", "5672")}//'
-)
+CELERY_BROKER_URL = 'amqp://guest:guest@localhost:5672//'
 
 # Result backend - Redis
-CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL)
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
+CELERY_TIMEZONE = 'Asia/Seoul'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
-
+CELERY_TASK_ALWAYS_EAGER = False
 
 # =============================================================================
 # OpenSearch Configuration
@@ -194,15 +195,16 @@ OPENSEARCH_USE_SSL = os.getenv('OPENSEARCH_USE_SSL', 'False').lower() == 'true'
 # =============================================================================
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 LANGCHAIN_TRACING_V2 = os.getenv('LANGCHAIN_TRACING_V2', 'false')
 LANGCHAIN_API_KEY = os.getenv('LANGCHAIN_API_KEY', '')
 
 
 # =============================================================================
-# fashn.ai Configuration
+# The New Black Virtual Try-On Configuration
 # =============================================================================
 
-FASHN_API_KEY = os.getenv('FASHN_API_KEY', '')
+THENEWBLACK_API_KEY = os.getenv('THENEWBLACK_API_KEY', '')
 
 
 # =============================================================================
@@ -217,14 +219,32 @@ GOOGLE_APPLICATION_CREDENTIALS = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')
 # =============================================================================
 
 REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+}
+
+
+# =============================================================================
+# JWT Settings
+# =============================================================================
+
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
 }
 
 
@@ -243,7 +263,7 @@ if GCS_BUCKET_NAME and GCS_CREDENTIALS_FILE and os.path.exists(GCS_CREDENTIALS_F
     GS_BUCKET_NAME = GCS_BUCKET_NAME
     GS_PROJECT_ID = GCS_PROJECT_ID
     GS_CREDENTIALS = service_account.Credentials.from_service_account_file(GCS_CREDENTIALS_FILE)
-    GS_DEFAULT_ACL = None  # uniform bucket-level access 사용시 ACL 비활성화
+    GS_DEFAULT_ACL = None  # Uniform bucket-level access 사용 시 ACL 비활성화
     GS_QUERYSTRING_AUTH = False
 
 MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
@@ -257,43 +277,137 @@ MEDIA_ROOT = BASE_DIR / 'media'
 LOG_DIR = BASE_DIR / 'logs'
 LOG_DIR.mkdir(exist_ok=True)
 
+# Loki configuration
+LOKI_URL = os.getenv('LOKI_URL', 'http://localhost:3100/loki/api/v1/push')
+LOKI_ENABLED = os.getenv('LOKI_ENABLED', 'true').lower() == 'true'
+
+# Build handlers dict dynamically
+_log_handlers = {
+    'console': {
+        'class': 'logging.StreamHandler',
+        'formatter': 'verbose',
+    },
+    'file': {
+        'class': 'logging.handlers.RotatingFileHandler',
+        'filename': LOG_DIR / 'django.log',
+        'maxBytes': 10 * 1024 * 1024,  # 10MB
+        'backupCount': 5,
+        'formatter': 'json',
+    },
+}
+
+# Add Loki handler if enabled
+if LOKI_ENABLED:
+    try:
+        import logging_loki
+        _log_handlers['loki'] = {
+            'class': 'logging_loki.LokiHandler',
+            'url': LOKI_URL,
+            'tags': {'app': 'team-g-backend'},
+            'version': '1',
+        }
+        _active_handlers = ['console', 'file', 'loki']
+    except ImportError:
+        _active_handlers = ['console', 'file']
+else:
+    _active_handlers = ['console', 'file']
+
+# Custom JSON Formatter to include extra fields
+import logging
+import json as json_module
+
+
+class JsonFormatter(logging.Formatter):
+    """JSON Formatter that includes extra fields from log records."""
+
+    RESERVED_ATTRS = {
+        'name', 'msg', 'args', 'created', 'filename', 'funcName', 'levelname',
+        'levelno', 'lineno', 'module', 'msecs', 'pathname', 'process',
+        'processName', 'relativeCreated', 'stack_info', 'exc_info', 'exc_text',
+        'thread', 'threadName', 'taskName', 'message',
+    }
+
+    def format(self, record):
+        log_obj = {
+            'timestamp': self.formatTime(record, self.datefmt),
+            'level': record.levelname,
+            'logger': record.name,
+            'module': record.module,
+            'message': record.getMessage(),
+        }
+
+        # Add extra fields
+        for key, value in record.__dict__.items():
+            if key not in self.RESERVED_ATTRS and not key.startswith('_'):
+                try:
+                    json_module.dumps(value)  # Check if serializable
+                    log_obj[key] = value
+                except (TypeError, ValueError):
+                    log_obj[key] = str(value)
+
+        return json_module.dumps(log_obj, ensure_ascii=False)
+
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
-            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'format': '{levelname} {asctime} {name} {module} {process:d} {thread:d} {message}',
             'style': '{',
         },
         'json': {
-            'format': '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(module)s", "message": "%(message)s"}',
+            '()': JsonFormatter,
         },
     },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
-        },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': LOG_DIR / 'django.log',
-            'maxBytes': 10 * 1024 * 1024,  # 10MB
-            'backupCount': 5,
-            'formatter': 'json',
-        },
-    },
+    'handlers': _log_handlers,
     'root': {
-        'handlers': ['console', 'file'],
+        'handlers': _active_handlers,
         'level': 'INFO',
     },
     'loggers': {
         'django': {
-            'handlers': ['console', 'file'],
+            'handlers': _active_handlers,
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
             'propagate': False,
         },
         'celery': {
-            'handlers': ['console', 'file'],
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'analyses': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'services': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'fittings': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'orders': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'users': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'agents': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'config': {
+            'handlers': _active_handlers,
             'level': 'INFO',
             'propagate': False,
         },
@@ -307,3 +421,22 @@ LOGGING = {
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Team_G API',
+    'DESCRIPTION': 'Team_G Shopping Agent Backend API Documentation',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    # Optional: Grouping or other settings
+}

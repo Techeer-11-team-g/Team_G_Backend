@@ -4,8 +4,9 @@ django-cors-headers==4.3.1
 celery==5.3.6                     
 redis==5.0.1                      
 gunicorn==21.2.0                  
-langchain==0.1.16                 
-langchain-openai==0.0.8           
+langchain==0.1.16
+langchain-anthropic==0.1.1
+anthropic==0.21.0
 openai==1.12.0                    
 PyMySQL==1.1.0                    
 opensearch-py==2.4.2              
@@ -18,7 +19,23 @@ Pillow==10.2.0
 requests==2.31.0
 python-dotenv==1.0.1
 cryptography==42.0.5
+djangorestframework-simplejwt==5.3.1
 transformers==4.47.1
 torch==2.2.2
 httpx>=0.25.0,<0.28.0
+fashion-clip==0.2.2
+drf-spectacular==0.27.1
 
+# Observability - Logging (Loki)
+python-logging-loki==0.3.1
+
+# Observability - Tracing (OpenTelemetry + Jaeger)
+opentelemetry-api==1.22.0
+opentelemetry-sdk==1.22.0
+opentelemetry-instrumentation-django==0.43b0
+opentelemetry-instrumentation-celery==0.43b0
+opentelemetry-instrumentation-requests==0.43b0
+opentelemetry-instrumentation-logging==0.43b0
+opentelemetry-instrumentation-httpx==0.43b0
+opentelemetry-instrumentation-grpc==0.43b0
+opentelemetry-exporter-jaeger==1.21.0

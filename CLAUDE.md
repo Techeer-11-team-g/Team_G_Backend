@@ -4,149 +4,248 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Image-based product search + virtual fitting backend service. Users upload an image, the system detects fashion items (shoes, bags, tops, pants), crops and vectorizes them, searches for similar products via OpenSearch k-NN, evaluates results with LangChain, and optionally generates virtual try-on images via fashn.ai.
+Team_G is an AI-powered fashion image search backend built with Django 4.2 and Django REST Framework. It processes uploaded images through a pipeline: Google Vision object detection → FashionCLIP embeddings → OpenSearch k-NN vector search → LLM re-ranking (Claude/GPT) → virtual try-on (fashn.ai).
 
-## Tech Stack
+**Python Version:** 3.11.8 (필수) - pyenv 사용 권장
 
-- **Python 3.11.8** (exact version required - team-wide)
-- **Django 4.2.11 LTS** + Django REST Framework 3.14.0
-- **Celery 5.3.6** with RabbitMQ (broker) and Redis (result backend + cache)
-- **MySQL 8.0** (main DB via Cloud SQL)
-- **OpenSearch 2.11.1** (vector search with k-NN)
-- **External APIs**: Google Vision API, OpenAI API, fashn.ai
+## Build and Run Commands
 
-## Commands
-
-### Local Development
+### Local Development (Docker - Recommended)
 ```bash
-# Create virtual environment (must use Python 3.11.8)
-python3 -m venv venv
-source venv/bin/activate  # Mac/Linux
-venv\Scripts\activate      # Windows
-
-pip install -r requirements.txt
-cp .env.example .env       # Edit with your API keys
-
-python manage.py migrate
-python manage.py runserver
-```
-
-### Celery (separate terminals)
-```bash
-celery -A config worker -l info
-celery -A config beat -l info
-```
-
-### Docker (recommended for full stack)
-```bash
+cp .env.example .env  # Edit with API keys
 docker-compose up -d
 docker-compose exec web python manage.py migrate
 docker-compose exec web python manage.py createsuperuser
 ```
 
-### Common Django Commands
+### Local Development (Manual)
 ```bash
-python manage.py makemigrations
+# Requires Python 3.11.8 (use pyenv)
+pyenv install 3.11.8 && pyenv local 3.11.8
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
 python manage.py migrate
-python manage.py collectstatic --noinput
-python manage.py createsuperuser
+python manage.py runserver
+
+# Celery worker (separate terminal, required for async tasks)
+celery -A config worker -l info
+# macOS workaround for fork safety issues:
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES celery -A config worker -l info -P solo
+
+# Celery beat scheduler (separate terminal)
+celery -A config beat -l info
 ```
 
 ### Testing
 ```bash
-python manage.py test                    # Run all tests
-python manage.py test analyses           # Run tests for specific app
-python manage.py test analyses.tests.TestAnalysisAPI  # Run specific test class
+python manage.py test                              # All tests
+python manage.py test analyses                     # Single app
+python manage.py test analyses.tests.TestAnalysisAPI  # Single class
+python manage.py test --keepdb                     # Preserve test DB between runs
+```
+
+### Database Commands
+```bash
+python manage.py makemigrations
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py shell                             # Django interactive shell
 ```
 
 ## Architecture
 
-### Core Flow
+### Service Layer (`services/`)
+Singleton factory pattern in `services/__init__.py` provides centralized access to external API clients. All services are lazy-initialized on first call.
+
+```python
+# Usage pattern - import getter functions from services/__init__.py
+from services import get_vision_service, get_embedding_service, get_redis_service
+
+vision = get_vision_service()        # Returns singleton instance
+embedding = get_embedding_service()  # Returns singleton instance
 ```
-Image Upload → Google Vision (detect items) → Crop items → OpenAI (vectorize)
-    → OpenSearch (k-NN search) → LangChain (evaluate) → Return results
-    → (optional) fashn.ai (virtual fitting)
+
+Service modules:
+- `vision_service.py` - Google Vision API wrapper with category normalization
+- `embedding_service.py` - Marqo-FashionCLIP 512-dim embeddings (Apple Silicon compatible with Float64)
+- `gpt4v_service.py` - Claude Vision for attribute extraction + ranking
+- `opensearch_client.py` - Vector search with k-NN (HNSW algorithm, cosine similarity)
+- `langchain_service.py` - LLM orchestration via LangChain
+- `fashn_service.py` - Virtual fitting integration
+- `redis_service.py` - Analysis state management (PENDING → RUNNING → DONE/FAILED)
+- `metrics.py` - Prometheus custom metrics
+
+### Celery Task Pipeline (`analyses/tasks/`)
+Uses Celery Group/Chord pattern for parallel per-object processing:
+
+```python
+# Pattern: Group of parallel tasks → callback
+chord([task1, task2, task3])(callback)  # Tasks run in parallel
 ```
+
+Task modules:
+- `analysis.py` - Main pipeline: Vision → crop → embed → search → rank → save
+- `refine.py` - Natural language re-analysis with query parsing
+- `upload.py` - Async GCS upload
+- `fitting.py` - Virtual try-on processing
+- `storage.py` - GCS download/upload utilities
+- `image_processing.py` - Crop, resize, bbox normalization
+- `db_operations.py` - Batch DB saves, status updates, metrics recording
+
+Three named queues with routing in `config/celery.py`:
+- `default` - General tasks
+- `analysis` - Image analysis (high priority)
+- `fitting` - Virtual fitting
 
 ### Django Apps
+- `analyses/` - Core image analysis pipeline
+  - Models: UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping, SelectedProduct
+  - Views: UploadedImageView, ImageAnalysisView
+- `fittings/` - Virtual fitting (UserImage, FittingImage with status caching)
+- `products/` - Product catalog (Product, SizeCode)
+- `orders/` - Order management (Order, OrderItem, CartItem with soft delete)
+- `users/` - Custom User model with JWT auth (simplejwt)
 
-| App | Purpose |
-|-----|---------|
-| `users` | Custom user model (`AUTH_USER_MODEL = 'users.User'`) |
-| `products` | Product catalog with `Product`, `SizeCode` models |
-| `analyses` | Image upload, object detection, product matching pipeline |
-| `fittings` | Virtual fitting with fashn.ai integration |
-| `orders` | Order management |
+### Data Models Key Patterns
 
-### Key Models (`analyses/models.py`)
-
-- `UploadedImage` → `ImageAnalysis` (1:N) - Analysis jobs per image
-- `UploadedImage` → `DetectedObject` (1:N) - Fashion items found in image
-- `DetectedObject` → `ObjectProductMapping` → `Product` - k-NN search results
-- `SelectedProduct` - User's product selections with size
-
-### API Endpoints
-
-```
-POST /api/v1/uploaded-images     - Upload image
-GET  /api/v1/uploaded-images     - List uploads (cursor pagination)
-POST /api/v1/analyses            - Start analysis (triggers Celery task)
-GET  /api/v1/analyses/{id}/status - Poll analysis status/progress
-GET  /health/                    - Health check
-GET  /metrics                    - Prometheus metrics
-```
-
-### Services Module (`services/`)
-
-Each service has a singleton getter pattern:
+**Soft Delete:** Orders/CartItems use `BaseSoftDeleteModel` with `SoftDeleteManager`
 ```python
-from services import get_vision_service, get_embedding_service, get_redis_service
-from services import OpenSearchService, LangChainService
+Order.objects.active()   # Only non-deleted
+Order.objects.deleted()  # Only deleted
 ```
 
-| Service | Purpose |
-|---------|---------|
-| `vision_service` | Google Vision API - detect fashion items with bounding boxes |
-| `embedding_service` | OpenAI API - convert images/text to vectors |
-| `opensearch_client` | OpenSearch k-NN - search similar products by vector |
-| `langchain_service` | LangChain + GPT - evaluate search quality |
-| `fashn_service` | fashn.ai - virtual fitting image generation |
-| `redis_service` | Analysis status management (PENDING/RUNNING/DONE/FAILED) |
-| `rabbitmq_client` | Direct RabbitMQ connection (Celery uses this implicitly) |
+**Analysis Status:** Tracked in both MySQL (ImageAnalysis model) and Redis (for fast polling)
+```python
+# Redis keys pattern
+analysis:{id}:status    # PENDING, RUNNING, DONE, FAILED
+analysis:{id}:progress  # 0-100 percentage
+analysis:{id}:data      # Cached results (24h TTL)
+```
 
-### Celery Tasks
+### API Endpoints (`/api/v1/`)
+```
+POST   /uploaded-images          - Upload image (auto_analyze flag triggers pipeline)
+GET    /uploaded-images          - List upload history with results
+GET    /uploaded-images/<id>     - Get image + analysis results
 
-**`analyses/tasks.py`:**
-- `process_image_analysis` - Full pipeline: detect → crop → embed → search → evaluate
-- `process_virtual_fitting` - Virtual try-on via fashn.ai (also in `fittings/tasks.py`)
+POST   /analyses                 - Trigger analysis on uploaded image
+GET    /analyses/<id>            - Get analysis results
+GET    /analyses/<id>/status     - Poll status from Redis (fast)
+PATCH  /analyses                 - Refine analysis with natural language query
 
-**`fittings/tasks.py`:**
-- `process_fitting_task` - Alternative fitting task that updates DB directly
+POST   /fittings                 - Create virtual try-on
+GET    /fittings/<id>            - Get fitting result
 
-Task configuration: `@shared_task(bind=True, max_retries=3, default_retry_delay=60)`
+POST   /orders                   - Create order
+GET    /orders                   - List orders
+GET    /orders/<id>              - Get order details
+PATCH  /orders/<id>              - Update order status
 
-### Configuration
+POST   /auth/register            - User signup
+POST   /auth/login               - JWT token generation
+POST   /auth/refresh             - Token refresh
+GET    /users/profile            - Get profile (authenticated)
+PATCH  /users/profile            - Update profile
+```
 
-All settings via environment variables (`.env` file). Key ones:
-- `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`
-- `OPENAI_API_KEY`, `FASHN_API_KEY`
-- `GOOGLE_APPLICATION_CREDENTIALS`, `GCS_BUCKET_NAME`
-- `DB_*` (MySQL), `REDIS_*`, `RABBITMQ_*`, `OPENSEARCH_*`
+**Documentation:** `/api/schema/swagger-ui/` (Swagger) or `/api/schema/redoc/` (ReDoc)
+
+## Key Configuration
+
+- Django settings: `config/settings.py`
+- Celery config: `config/celery.py` (includes queue routing, worker init hooks)
+- URL routing: `config/urls.py`
+- OpenTelemetry: `config/tracing.py`
+- Request logging middleware: `config/middleware.py`
+- Environment variables: `.env.example` (200+ variables)
 
 ## Deployment
 
-- **CI/CD**: GitHub Actions (`.github/workflows/deploy.yml`) - pushes to GCR, deploys to GCE
-- **Multi-VM architecture**: App Server, Queue Server, Search Server, Monitoring Server
-- **See**: `deploy/DEPLOYMENT.md` for full GCE deployment guide
+GitHub Actions CI/CD in `.github/workflows/deploy.yml` deploys to 4 GCP VMs:
+- `deploy/app-server/` - Django + Nginx + Gunicorn
+- `deploy/queue-server/` - Celery workers + Redis + RabbitMQ
+- `deploy/search-server/` - OpenSearch
+- `deploy/monitoring-server/` - Prometheus + Grafana + Loki + Jaeger
 
-## Service Ports
+See `deploy/DEPLOYMENT.md` for GCP infrastructure setup.
 
-| Service | Port |
-|---------|------|
-| Django | 8000 |
-| MySQL | 3306 |
-| Redis | 6379 |
-| RabbitMQ | 5672, 15672 (mgmt) |
-| OpenSearch | 9200 |
-| Grafana | 3000 |
-| Prometheus | 9090 |
+## External Services Required
+
+- OpenAI API (GPT for chat)
+- Anthropic Claude API (vision + text, attribute extraction, ranking)
+- Google Vision API (object detection)
+- Google Cloud Storage (image storage)
+- fashn.ai / TheNewBlack API (virtual try-on)
+
+## Observability
+
+### Distributed Tracing (Jaeger)
+OpenTelemetry auto-instruments Django, Celery, requests, and gRPC. Custom spans added for pipeline stages.
+
+**View traces:** http://localhost:16686
+- Service: `team-g-backend` (Django HTTP)
+- Service: `team-g-celery-worker` (Celery tasks)
+
+**Analysis pipeline span hierarchy:**
+```
+POST /api/v1/analyses
+  └── apply_async/process_image_analysis
+      └── run/process_image_analysis
+          ├── 0_detect_objects_google_vision
+          ├── 1_crop_image
+          ├── 2_upload_to_gcs
+          ├── 3_extract_attributes_claude
+          ├── 4_generate_embedding_fashionclip
+          ├── 5_search_opensearch_knn
+          ├── 6_rerank_claude
+          └── 7_save_results_to_db
+```
+
+### Metrics (Prometheus)
+Custom metrics in `services/metrics.py`:
+- `teamg_analysis_total{status}` - Analysis count by status
+- `teamg_analysis_duration_seconds{stage}` - Pipeline stage latency
+- `teamg_external_api_requests_total{service,status}` - External API calls
+- `teamg_fittings_requested_total{status}` - Fitting requests
+
+### Logging (Loki)
+Structured JSON logs with custom `JsonFormatter`. Use `extra` dict for structured fields:
+
+```python
+logger.info(
+    "주문 생성 완료",
+    extra={
+        'event': 'order_created',
+        'user_id': user.id,
+        'order_id': order.id,
+    }
+)
+```
+
+`RequestLoggingMiddleware` (`config/middleware.py`) auto-logs all API requests/responses.
+
+### Health Check
+- `GET /health/` - Application health status
+
+## Git Branch Conventions
+
+Branch naming: `feat/#<issue>`, `fix/#<issue>`, `refactor/#<issue>`
+
+```bash
+# Push with quoted branch name (# requires escaping in bash)
+git push origin 'feat/#123'
+```
+
+## Key Implementation Details
+
+### Apple Silicon (M1/M2/M3) Support
+FashionCLIP in `embedding_service.py` uses Float64 dtype on ARM architecture to avoid numerical precision issues.
+
+### Vision API Category Normalization
+`vision_service.py` and `analyses/constants.py` contain `CATEGORY_MAPPING` to normalize variable Vision API labels (e.g., 'sneaker' → 'shoes', 'handbag' → 'bag').
+
+### FashionCLIP Model Warm-up
+Model is pre-loaded at Celery worker startup via `worker_process_init` signal in `config/celery.py` to avoid cold start latency.
+
+### GCS Direct Upload Optimization
+When `auto_analyze=True`, base64-encoded images are passed directly to analysis tasks, skipping the GCS round-trip for faster processing.

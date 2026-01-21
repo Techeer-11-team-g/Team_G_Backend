@@ -30,8 +30,16 @@ class RedisService:
     ANALYSIS_PROGRESS_KEY = 'analysis:{analysis_id}:progress'
     ANALYSIS_DATA_KEY = 'analysis:{analysis_id}:data'
 
-    # Default TTL (24 hours)
-    DEFAULT_TTL = 24 * 60 * 60
+    # TTL 정책 (용도별 구분)
+    # - 폴링용 상태: 분석 완료 후 결과 확인까지 충분한 시간 (30분)
+    # - 대화 히스토리: 세션 유지용 (2시간)
+    # - 재분석 상태: 재분석 완료 후 확인까지 (30분)
+    TTL_POLLING = 30 * 60           # 30분 - 분석/피팅 상태 폴링용
+    TTL_CONVERSATION = 2 * 60 * 60  # 2시간 - 대화 히스토리 (연속 재분석 세션)
+    TTL_REFINE = 30 * 60            # 30분 - 재분석 상태 폴링용
+
+    # 하위 호환성을 위한 기본값 (신규 코드는 용도별 TTL 사용 권장)
+    DEFAULT_TTL = TTL_POLLING
 
     def __init__(self):
         self.client = redis.Redis(
@@ -66,13 +74,13 @@ class RedisService:
         Args:
             analysis_id: Analysis job ID
             status: Job status
-            ttl: TTL in seconds (default 24h)
+            ttl: TTL in seconds (default 30분)
 
         Returns:
             Success status
         """
         key = self._get_status_key(analysis_id)
-        ttl = ttl or self.DEFAULT_TTL
+        ttl = ttl or self.TTL_POLLING
 
         try:
             self.client.setex(key, ttl, status.value)
@@ -117,7 +125,7 @@ class RedisService:
             Success status
         """
         key = self._get_progress_key(analysis_id)
-        ttl = ttl or self.DEFAULT_TTL
+        ttl = ttl or self.TTL_POLLING
 
         try:
             self.client.setex(key, ttl, str(progress))
@@ -162,7 +170,7 @@ class RedisService:
             Success status
         """
         key = self._get_data_key(analysis_id)
-        ttl = ttl or self.DEFAULT_TTL
+        ttl = ttl or self.TTL_POLLING
 
         try:
             self.client.setex(key, ttl, json.dumps(data))
@@ -290,6 +298,50 @@ class RedisService:
             return bool(self.client.exists(key))
         except redis.RedisError as e:
             logger.error(f"Redis exists error: {e}")
+            return False
+
+    def setex(self, key: str, ttl: int, value: str) -> bool:
+        """Set a value with expiration."""
+        try:
+            self.client.setex(key, ttl, value)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis setex error: {e}")
+            return False
+
+    def lpush(self, key: str, value: str) -> bool:
+        """Push a value to the left of a list."""
+        try:
+            self.client.lpush(key, value)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis lpush error: {e}")
+            return False
+
+    def ltrim(self, key: str, start: int, end: int) -> bool:
+        """Trim a list to the specified range."""
+        try:
+            self.client.ltrim(key, start, end)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis ltrim error: {e}")
+            return False
+
+    def lrange(self, key: str, start: int, end: int) -> list:
+        """Get a range of elements from a list."""
+        try:
+            return self.client.lrange(key, start, end)
+        except redis.RedisError as e:
+            logger.error(f"Redis lrange error: {e}")
+            return []
+
+    def expire(self, key: str, ttl: int) -> bool:
+        """Set expiration on a key."""
+        try:
+            self.client.expire(key, ttl)
+            return True
+        except redis.RedisError as e:
+            logger.error(f"Redis expire error: {e}")
             return False
 
 
