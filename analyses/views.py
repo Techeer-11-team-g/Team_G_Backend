@@ -765,16 +765,19 @@ class FeedView(APIView):
             OpenApiParameter("cursor", type=str, description="페이지네이션용 커서"),
             OpenApiParameter("limit", type=int, default=20, description="페이지당 아이템 수"),
             OpenApiParameter("category", type=str, description="카테고리 필터 (shoes, top, bottom 등)"),
+            OpenApiParameter("style", type=str, description="스타일 태그 필터 (amekaji, casual, street 등)"),
         ],
         responses={200: OpenApiResponse(description="피드 목록")}
     )
     def get(self, request):
         """공개 피드 조회"""
+        from django.db.models import Q
         from .serializers import FeedItemSerializer
 
         cursor = request.query_params.get('cursor')
         limit = min(int(request.query_params.get('limit', 20)), 50)  # 최대 50개
         category = request.query_params.get('category')
+        style = request.query_params.get('style')
 
         # 공개 + 분석 완료된 이미지만 조회
         queryset = UploadedImage.objects.filter(
@@ -795,6 +798,12 @@ class FeedView(APIView):
                 detected_objects__object_category=category,
                 detected_objects__is_deleted=False
             ).distinct()
+
+        # 스타일 태그 필터 (style_tag1 또는 style_tag2에 있으면 매칭)
+        if style:
+            queryset = queryset.filter(
+                Q(style_tag1=style) | Q(style_tag2=style)
+            )
 
         # 커서 기반 페이지네이션
         if cursor:
@@ -827,6 +836,45 @@ class FeedView(APIView):
             response_data['next_cursor'] = next_cursor
 
         return Response(response_data)
+
+
+class FeedStylesView(APIView):
+    """
+    피드 스타일 태그 목록 API
+
+    GET /api/v1/feed/styles - 필터 버튼용 스타일 태그 목록
+    """
+    permission_classes = [IsAuthenticated]
+
+    # 스타일 태그 정의 (버튼 표시용)
+    STYLE_TAGS = [
+        {"value": "amekaji", "label": "아메카지"},
+        {"value": "casual", "label": "캐주얼"},
+        {"value": "street", "label": "스트릿"},
+        {"value": "minimal", "label": "미니멀"},
+        {"value": "formal", "label": "포멀"},
+        {"value": "sporty", "label": "스포티"},
+        {"value": "vintage", "label": "빈티지"},
+        {"value": "cityboy", "label": "시티보이"},
+        {"value": "preppy", "label": "프레피"},
+        {"value": "workwear", "label": "워크웨어"},
+        {"value": "bohemian", "label": "보헤미안"},
+        {"value": "feminine", "label": "페미닌"},
+        {"value": "gothic", "label": "고딕"},
+        {"value": "normcore", "label": "놈코어"},
+    ]
+
+    @extend_schema(
+        tags=["Feed"],
+        summary="스타일 태그 목록 조회",
+        description="피드 필터 버튼용 스타일 태그 목록을 반환합니다.",
+        responses={200: OpenApiResponse(description="스타일 태그 목록")}
+    )
+    def get(self, request):
+        """스타일 태그 목록 반환"""
+        return Response({
+            "styles": self.STYLE_TAGS
+        })
 
 
 class MyHistoryView(APIView):

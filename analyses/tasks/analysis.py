@@ -329,6 +329,12 @@ def analysis_complete_callback(
 
             push_metrics()
 
+            # 스타일 태그 추출 태스크 비동기 호출 (실패해도 분석에 영향 없음)
+            try:
+                extract_style_tags_task.delay(analysis_id)
+            except Exception as e:
+                logger.warning(f"Failed to trigger style tag extraction: {e}")
+
             return {
                 'analysis_id': analysis_id,
                 'status': 'DONE',
@@ -922,3 +928,71 @@ def _normalize_result_bbox(bbox: dict) -> dict:
         'x2': bbox.get('x_max', 0) / img_width if img_width > 0 else 0,
         'y2': bbox.get('y_max', 0) / img_height if img_height > 0 else 0,
     }
+
+
+# =============================================================================
+# Style Tag Extraction Task
+# =============================================================================
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def extract_style_tags_task(self, analysis_id: str):
+    """
+    코디 이미지에서 스타일 태그 추출.
+
+    분석 완료 후 비동기로 호출되어 UploadedImage에 스타일 태그를 저장합니다.
+    실패해도 분석 결과에는 영향 없음.
+    """
+    from analyses.models import ImageAnalysis
+    from services.gpt4v_service import get_gpt4v_service
+
+    with create_span(TRACER_NAME, "extract_style_tags") as ctx:
+        ctx.set("analysis.id", analysis_id)
+
+        try:
+            # 분석 및 원본 이미지 조회
+            analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
+            uploaded_image = analysis.uploaded_image
+
+            if not uploaded_image or not uploaded_image.uploaded_image_url:
+                logger.warning(f"No image URL for analysis {analysis_id}")
+                return {'status': 'skipped', 'reason': 'no_image_url'}
+
+            # 이미지 다운로드
+            image_bytes = _download_image(uploaded_image.uploaded_image_url)
+
+            # Claude Vision으로 스타일 태그 추출
+            gpt4v_service = get_gpt4v_service()
+            style_tag1, style_tag2 = gpt4v_service.extract_style_tags(image_bytes)
+
+            # UploadedImage에 저장
+            uploaded_image.style_tag1 = style_tag1
+            uploaded_image.style_tag2 = style_tag2
+            uploaded_image.save(update_fields=['style_tag1', 'style_tag2', 'updated_at'])
+
+            logger.info(
+                f"Style tags extracted for analysis {analysis_id}",
+                extra={
+                    'event': 'style_tags_saved',
+                    'analysis_id': analysis_id,
+                    'style_tag1': style_tag1,
+                    'style_tag2': style_tag2,
+                }
+            )
+
+            ctx.set("style_tag1", style_tag1 or "none")
+            ctx.set("style_tag2", style_tag2 or "none")
+
+            return {
+                'status': 'success',
+                'style_tag1': style_tag1,
+                'style_tag2': style_tag2,
+            }
+
+        except ImageAnalysis.DoesNotExist:
+            logger.error(f"ImageAnalysis {analysis_id} not found for style tag extraction")
+            return {'status': 'error', 'reason': 'analysis_not_found'}
+
+        except Exception as e:
+            logger.error(f"Style tag extraction failed for {analysis_id}: {e}")
+            ctx.set("error", str(e))
+            raise self.retry(exc=e)

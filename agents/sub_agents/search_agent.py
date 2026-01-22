@@ -124,7 +124,7 @@ class SearchAgent:
                     # 이미지 분석 재검색 - 다른 상품 보여주기
                     analysis_id = context.get('current_analysis_id')
                     if analysis_id:
-                        return self.retry_image_search(analysis_id, context)
+                        return self.retry_image_search(analysis_id, context, message)
                     else:
                         return ResponseBuilder.error(
                             "no_previous_search",
@@ -276,25 +276,77 @@ class SearchAgent:
     def retry_image_search(
         self,
         analysis_id: int,
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        message: str = ''
     ) -> Dict[str, Any]:
         """
         이미지 분석 재검색 - 이전에 보여준 상품 제외하고 다른 상품 반환
+
+        지원하는 참조 방식:
+        1. "1번 다시 찾아줘" - 인덱스로 특정 상품 카테고리 재검색
+        2. "상의 다시 찾아줘" - 카테고리명으로 재검색
+        3. "청바지 다시 찾아줘" - 아이템 타입으로 재검색
+        4. "나이키 다시 찾아줘" - 브랜드/상품명으로 매칭된 상품 재검색
         """
         try:
+            # 인덱스 참조 확인 (예: "1번 다시 찾아줘")
+            refs = context.get('intent_result', {}).get('references', {})
+            indices = refs.get('indices', [])
+
+            # 현재 검색 결과
+            current_products = context.get('search_results', [])
+            target_category = None
+            target_item_type = None
+            target_index = None  # 교체할 인덱스
+
+            # 1. 인덱스로 참조 (예: "1번 다시 찾아줘")
+            if indices and current_products:
+                idx = indices[0]
+                if 1 <= idx <= len(current_products):
+                    target_product = current_products[idx - 1]
+                    target_category = target_product.get('category')
+                    target_index = idx
+                    logger.info(f"Retry by index {idx}: category={target_category}")
+
+            # 2. 메시지에서 카테고리/아이템타입 추출 (예: "상의 다시 찾아줘", "청바지 다시 찾아줘")
+            if not target_category and message:
+                msg_category, msg_item_type = self._extract_filter_from_message(message)
+                if msg_category or msg_item_type:
+                    target_category = msg_category
+                    target_item_type = msg_item_type
+                    # 해당 카테고리의 상품 인덱스 찾기 (교체용)
+                    if current_products:
+                        target_index = self._find_product_index_by_category(
+                            current_products, msg_category, msg_item_type
+                        )
+                    logger.info(f"Retry by category/item_type: category={msg_category}, item_type={msg_item_type}, index={target_index}")
+
+            # 3. 메시지에서 브랜드/상품명 매칭 (예: "나이키 다시 찾아줘")
+            if not target_category and not target_item_type and message and current_products:
+                matched_product, matched_idx = self._find_product_by_name_or_brand(message, current_products)
+                if matched_product:
+                    target_category = matched_product.get('category')
+                    target_index = matched_idx
+                    logger.info(f"Retry by product/brand match: product={matched_product.get('product_name', '')[:20]}, index={target_index}")
+
             # 이전에 보여준 상품 ID 목록
             shown_product_ids = context.get('shown_product_ids', [])
 
-            # 카테고리/아이템타입 필터 (저장된 값 사용)
-            category_filter = context.get('analysis_category_filter')
-            item_type_filter = context.get('analysis_item_type_filter')
+            # 카테고리/아이템타입 필터
+            category_filter = target_category or context.get('analysis_category_filter')
+            item_type_filter = target_item_type or context.get('analysis_item_type_filter')
+
+            # 재검색 시 반환할 상품 수 (특정 인덱스 재검색 시 3개)
+            retry_count = 3 if target_index else 1
 
             # 새로운 상품 조회 (이전 상품 제외)
             products = self.get_analysis_results(
                 analysis_id,
                 category_filter=category_filter,
                 item_type_filter=item_type_filter,
-                exclude_product_ids=shown_product_ids
+                exclude_product_ids=shown_product_ids,
+                max_per_category=retry_count,
+                total_limit=retry_count if target_index else 5
             )
 
             if not products:
@@ -318,12 +370,52 @@ class SearchAgent:
             context['shown_product_ids'] = shown_product_ids + new_shown_ids
 
             # 컨텍스트 업데이트
-            context['search_results'] = products
+            # 특정 인덱스/카테고리만 재검색한 경우: 해당 카테고리 상품 3개 반환
+            RETRY_RESULT_COUNT = 3  # 재검색 시 반환할 상품 수
+
+            if target_index and current_products and products:
+                if 1 <= target_index <= len(current_products):
+                    original_product = current_products[target_index - 1]
+                    original_category = original_product.get('category', '')
+
+                    # 해당 카테고리의 상품 3개 반환 (대안 옵션)
+                    retry_products = products[:RETRY_RESULT_COUNT]
+
+                    # 각 상품에 인덱스 표시 (원래 인덱스 기준)
+                    for i, p in enumerate(retry_products):
+                        p['index'] = target_index
+                        p['retry_option'] = i + 1  # 1, 2, 3 옵션 번호
+
+                    # 보여준 상품 ID 업데이트
+                    new_shown_ids = [p.get('product_id') for p in retry_products if p.get('product_id')]
+                    context['shown_product_ids'] = shown_product_ids + new_shown_ids
+
+                    # 컨텍스트에 대안 상품 저장 (선택용)
+                    context['retry_options'] = {
+                        'target_index': target_index,
+                        'original_category': original_category,
+                        'products': retry_products
+                    }
+                    context['has_search_results'] = True
+
+                    result_message = f"{target_index}번 상품 대신 다른 상품 {len(retry_products)}개를 찾았어요:"
+
+                    logger.info(f"Image retry search: analysis_id={analysis_id}, category={category_filter}, index={target_index}, shown={len(shown_product_ids)}, new={len(retry_products)}")
+
+                    return ResponseBuilder.search_results(retry_products, result_message)
+                else:
+                    context['search_results'] = products
+                    result_message = message
+            else:
+                # 전체 재검색
+                context['search_results'] = products
+                result_message = message
+
             context['has_search_results'] = True
 
-            logger.info(f"Image retry search: analysis_id={analysis_id}, shown={len(shown_product_ids)}, new={len(products)}")
+            logger.info(f"Image retry search: analysis_id={analysis_id}, category={category_filter}, index={target_index or 'all'}, shown={len(shown_product_ids)}, new={len(products)}")
 
-            return ResponseBuilder.search_results(products, message)
+            return ResponseBuilder.search_results(products, result_message)
 
         except Exception as e:
             logger.error(f"Retry image search error: {e}", exc_info=True)
@@ -1188,6 +1280,113 @@ class SearchAgent:
 
         return None, None
 
+    def _find_product_index_by_category(
+        self,
+        products: List[Dict[str, Any]],
+        category: Optional[str],
+        item_type: Optional[str]
+    ) -> Optional[int]:
+        """
+        상품 목록에서 카테고리/아이템타입에 해당하는 상품의 인덱스 찾기
+
+        Args:
+            products: 현재 검색 결과 상품 목록
+            category: 카테고리 (예: 'top', 'bottom')
+            item_type: 아이템 타입 (예: 'jeans', 'sneakers')
+
+        Returns:
+            해당 상품의 인덱스 (1-based), 없으면 None
+        """
+        # 카테고리 매핑
+        CATEGORY_MAPPING = {
+            'shoes': ['shoes'],
+            'top': ['top'],
+            'bottom': ['bottom'],
+            'pants': ['bottom'],
+            'outer': ['outerwear', 'outer'],
+            'outerwear': ['outerwear', 'outer'],
+            'bag': ['bag'],
+        }
+
+        # 아이템 타입 → 카테고리 매핑
+        ITEM_TYPE_TO_CATEGORY = {
+            'coat': ['outerwear', 'outer'],
+            'padding': ['outerwear', 'outer'],
+            'jacket': ['outerwear', 'outer'],
+            'sneakers': ['shoes'],
+            'loafers': ['shoes'],
+            'boots': ['shoes'],
+            'jeans': ['bottom'],
+            'slacks': ['bottom'],
+        }
+
+        target_categories = []
+        if category:
+            target_categories = CATEGORY_MAPPING.get(category, [category])
+        if item_type:
+            target_categories.extend(ITEM_TYPE_TO_CATEGORY.get(item_type, []))
+
+        if not target_categories:
+            return None
+
+        for i, product in enumerate(products):
+            product_category = product.get('category', '').lower()
+            if product_category in target_categories:
+                return i + 1  # 1-based index
+
+        return None
+
+    def _find_product_by_name_or_brand(
+        self,
+        message: str,
+        products: List[Dict[str, Any]]
+    ) -> tuple[Optional[Dict[str, Any]], Optional[int]]:
+        """
+        메시지에서 브랜드명/상품명을 추출하여 해당 상품 찾기
+
+        Args:
+            message: 사용자 메시지
+            products: 현재 검색 결과 상품 목록
+
+        Returns:
+            (매칭된 상품, 인덱스) 튜플, 없으면 (None, None)
+        """
+        message_lower = message.lower()
+
+        # 불용어 제거 (검색 키워드만 남김)
+        stop_words = ['다시', '찾아', '줘', '보여', '검색', '해줘', '상품', '번']
+        words = message_lower.split()
+        keywords = [w for w in words if w not in stop_words and len(w) >= 2]
+
+        if not keywords:
+            return None, None
+
+        best_match = None
+        best_match_idx = None
+        best_score = 0
+
+        for i, product in enumerate(products):
+            brand = (product.get('brand_name') or '').lower()
+            name = (product.get('product_name') or '').lower()
+
+            score = 0
+            for kw in keywords:
+                if kw in brand:
+                    score += 2  # 브랜드 매칭은 가중치 높음
+                if kw in name:
+                    score += 1
+
+            if score > best_score:
+                best_score = score
+                best_match = product
+                best_match_idx = i + 1  # 1-based index
+
+        # 최소 점수 기준
+        if best_score >= 1:
+            return best_match, best_match_idx
+
+        return None, None
+
     def _get_available_categories_in_analysis(self, analysis_id: int) -> List[str]:
         """
         이미지 분석 결과에서 검출된 카테고리 목록 조회
@@ -1465,10 +1664,12 @@ class SearchAgent:
         analysis_id: int,
         category_filter: Optional[str] = None,
         item_type_filter: Optional[str] = None,
-        exclude_product_ids: Optional[List[int]] = None
+        exclude_product_ids: Optional[List[int]] = None,
+        max_per_category: int = 1,
+        total_limit: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        분석 결과 조회 - 각 detected_object별로 최고 매칭 상품 반환
+        분석 결과 조회 - 각 detected_object별로 상품 반환
 
         여러 객체가 탐지된 경우 (예: shoes, pants, outerwear)
         각 객체별로 가장 매칭 점수가 높은 상품을 반환합니다.
@@ -1479,6 +1680,8 @@ class SearchAgent:
             item_type_filter: 아이템 타입 필터 (예: 'coat', 'sneakers')
                              지정 시 해당 키워드가 상품명에 포함된 것만 반환
             exclude_product_ids: 제외할 상품 ID 목록 (재검색 시 이전 상품 제외)
+            max_per_category: 카테고리별 최대 상품 수 (기본 1, 재검색 시 3)
+            total_limit: 전체 최대 상품 수 (기본 5)
         """
         from analyses.models import ObjectProductMapping
         from django.db.models import Max
@@ -1529,10 +1732,12 @@ class SearchAgent:
 
         all_mappings = queryset.order_by('-confidence_score')
 
-        # 2. detected_object별로 그룹화하여 최고 점수 상품 선택
-        seen_objects = set()
+        # 2. detected_object별로 그룹화하여 상품 선택
+        # max_per_category > 1 이면 같은 카테고리에서 여러 상품 반환
+        object_counts = {}  # obj_id -> count
         results = []
         exclude_ids = set(exclude_product_ids or [])
+        seen_product_ids = set()  # 중복 상품 방지
 
         # 아이템 타입 키워드
         item_keywords = self.ITEM_TYPE_KEYWORDS.get(item_type_filter, []) if item_type_filter else []
@@ -1545,19 +1750,28 @@ class SearchAgent:
             if product.id in exclude_ids:
                 continue
 
-            if obj_id not in seen_objects:
-                product_name = (product.product_name or '').lower()
+            # 중복 상품 스킵
+            if product.id in seen_product_ids:
+                continue
 
-                # 아이템 타입 필터 적용 (키워드 매칭)
-                if item_keywords:
-                    if not any(kw.lower() in product_name for kw in item_keywords):
-                        continue  # 키워드 매칭 안 되면 스킵
+            # 해당 object에서 이미 max_per_category개를 가져왔으면 스킵
+            current_count = object_counts.get(obj_id, 0)
+            if current_count >= max_per_category:
+                continue
 
-                seen_objects.add(obj_id)
-                results.append(self._mapping_to_product(mapping, include_bbox=True))
+            product_name = (product.product_name or '').lower()
 
-            # 최대 5개까지
-            if len(results) >= 5:
+            # 아이템 타입 필터 적용 (키워드 매칭)
+            if item_keywords:
+                if not any(kw.lower() in product_name for kw in item_keywords):
+                    continue  # 키워드 매칭 안 되면 스킵
+
+            object_counts[obj_id] = current_count + 1
+            seen_product_ids.add(product.id)
+            results.append(self._mapping_to_product(mapping, include_bbox=True))
+
+            # 전체 최대 개수 도달 시 종료
+            if len(results) >= total_limit:
                 break
 
         if item_type_filter:

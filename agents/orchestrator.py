@@ -82,6 +82,17 @@ class MainOrchestrator:
                 context['has_search_results'] = True
                 logger.info(f"Using provided analysis_id: {self.analysis_id}")
 
+                # 분석 결과에서 상품 목록 로드 (피드에서 접근 시 필요)
+                if not context.get('search_results'):
+                    products = self._load_products_from_analysis(self.analysis_id)
+                    if products:
+                        context['search_results'] = products
+                        context['last_search_results'] = products
+                        # 보여준 상품 ID 저장 (retry_search에서 제외하기 위함)
+                        shown_ids = [p.get('product_id') for p in products if p.get('product_id')]
+                        context['shown_product_ids'] = shown_ids
+                        logger.info(f"Loaded {len(products)} products from analysis {self.analysis_id}")
+
             # 2. 입력 검증 및 정규화
             message = (message or '').strip()
             if not message and not image:
@@ -682,6 +693,84 @@ class MainOrchestrator:
             )
 
     # ============ Session Management (Redis) ============
+
+    def _load_products_from_analysis(self, analysis_id: int) -> list:
+        """
+        분석 결과에서 상품 목록 로드 (피드에서 접근 시 사용)
+
+        피드 UI와 동일한 순서를 유지하기 위해 DetectedObject당 가장 높은 신뢰도의
+        상품 하나만 로드합니다. (FeedDetectedObjectSerializer의 matched_product와 일치)
+
+        Args:
+            analysis_id: 분석 ID
+
+        Returns:
+            상품 목록 (last_search_results 형식)
+        """
+        try:
+            from analyses.models import ImageAnalysis, DetectedObject
+
+            analysis = ImageAnalysis.objects.select_related('uploaded_image').get(
+                id=analysis_id,
+                is_deleted=False
+            )
+
+            detected_objects = DetectedObject.objects.filter(
+                uploaded_image=analysis.uploaded_image,
+                is_deleted=False
+            ).prefetch_related(
+                'product_mappings',
+                'product_mappings__product',
+                'product_mappings__product__size_codes'
+            )
+
+            products = []
+            for idx, obj in enumerate(detected_objects):
+                # 피드와 동일하게 가장 높은 신뢰도의 매핑만 선택
+                mappings = list(obj.product_mappings.filter(is_deleted=False))
+                if not mappings:
+                    continue
+
+                # 최고 신뢰도 매핑 선택
+                best_mapping = max(mappings, key=lambda m: m.confidence_score)
+                product = best_mapping.product
+
+                if product:
+                    # 사이즈 정보 추출
+                    sizes = [
+                        {"code": sc.size_value, "is_available": True}
+                        for sc in product.size_codes.filter(is_deleted=False)
+                    ]
+
+                    products.append({
+                        'index': len(products) + 1,
+                        'product_id': product.id,
+                        'brand_name': product.brand_name,
+                        'product_name': product.product_name,
+                        'selling_price': product.selling_price,
+                        'product_image_url': product.product_image_url,
+                        'product_url': product.product_url,
+                        'sizes': sizes,
+                        'detected_object_id': obj.id,
+                        'category': obj.object_category,
+                        'bbox': {
+                            'x1': obj.bbox_x1,
+                            'y1': obj.bbox_y1,
+                            'x2': obj.bbox_x2,
+                            'y2': obj.bbox_y2,
+                        },
+                        'confidence_score': best_mapping.confidence_score,
+                    })
+
+            logger.info(f"Loaded {len(products)} products from analysis {analysis_id} (best match per object)")
+            return products
+
+        except ImageAnalysis.DoesNotExist:
+            logger.warning(f"Analysis {analysis_id} not found")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to load products from analysis {analysis_id}: {e}")
+            return []
 
     def _load_context(self) -> Dict[str, Any]:
         """Redis에서 세션 컨텍스트 로드"""
