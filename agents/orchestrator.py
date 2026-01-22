@@ -6,11 +6,19 @@ AI 패션 어시스턴트 - 메인 오케스트레이터
 import json
 import logging
 import re
+import time
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime
 
 from services import get_langchain_service, get_redis_service
+from services.metrics import (
+    CHAT_MESSAGES_TOTAL,
+    CHAT_INTENT_TOTAL,
+    CHAT_AGENT_ROUTING_TOTAL,
+    CHAT_SESSION_OPERATIONS_TOTAL,
+    CHAT_RESPONSE_DURATION,
+)
 from agents.schemas import INTENT_CLASSIFICATION_SCHEMA, SUPPORTED_CATEGORIES
 from agents.response_builder import ResponseBuilder
 from agents.sub_agents import SearchAgent, FittingAgent, CommerceAgent
@@ -70,6 +78,9 @@ class MainOrchestrator:
         Returns:
             응답 딕셔너리 (text, type, data, suggestions)
         """
+        start_time = time.time()
+        intent = 'unknown'
+
         try:
             # 1. 세션 컨텍스트 로드
             context = self._load_context()
@@ -96,6 +107,7 @@ class MainOrchestrator:
             # 2. 입력 검증 및 정규화
             message = (message or '').strip()
             if not message and not image:
+                CHAT_MESSAGES_TOTAL.labels(status='empty').inc()
                 return {
                     "session_id": self.session_id,
                     "response": ResponseBuilder.general_response(
@@ -112,14 +124,19 @@ class MainOrchestrator:
             intent_result = self._classify_intent(message, image, context)
             context['intent_result'] = intent_result
 
+            # 메트릭: Intent 분류 카운트
+            intent = intent_result.get('intent', 'unknown')
+            sub_intent = intent_result.get('sub_intent', 'unknown')
+            CHAT_INTENT_TOTAL.labels(intent=intent, sub_intent=sub_intent).inc()
+
             logger.info(
                 "Intent classified",
                 extra={
                     'event': 'intent_classified',
                     'user_id': self.user_id,
                     'session_id': self.session_id,
-                    'intent': intent_result.get('intent'),
-                    'sub_intent': intent_result.get('sub_intent'),
+                    'intent': intent,
+                    'sub_intent': sub_intent,
                 }
             )
 
@@ -131,6 +148,10 @@ class MainOrchestrator:
 
             # 6. 세션 상태 업데이트
             self._save_context(context)
+
+            # 메트릭: 성공
+            CHAT_MESSAGES_TOTAL.labels(status='success').inc()
+            CHAT_RESPONSE_DURATION.labels(intent=intent).observe(time.time() - start_time)
 
             # 7. 응답 구성
             return {
@@ -145,6 +166,10 @@ class MainOrchestrator:
             }
 
         except Exception as e:
+            # 메트릭: 에러
+            CHAT_MESSAGES_TOTAL.labels(status='error').inc()
+            CHAT_RESPONSE_DURATION.labels(intent=intent).observe(time.time() - start_time)
+
             logger.error(
                 f"Orchestrator error: {e}",
                 exc_info=True,
@@ -637,22 +662,28 @@ class MainOrchestrator:
 
         # 복합 의도 처리
         if intent == 'compound':
+            CHAT_AGENT_ROUTING_TOTAL.labels(agent='compound').inc()
             return self._handle_compound(intent_result, message, image, context)
 
         # 단일 의도 라우팅
         if intent == 'search':
+            CHAT_AGENT_ROUTING_TOTAL.labels(agent='search_agent').inc()
             return self.search_agent.handle(sub_intent, message, image, context)
 
         elif intent == 'fitting':
+            CHAT_AGENT_ROUTING_TOTAL.labels(agent='fitting_agent').inc()
             return self.fitting_agent.handle(sub_intent, context, image, message)
 
         elif intent == 'commerce':
+            CHAT_AGENT_ROUTING_TOTAL.labels(agent='commerce_agent').inc()
             return self.commerce_agent.handle(sub_intent, message, context)
 
         elif intent == 'general':
+            CHAT_AGENT_ROUTING_TOTAL.labels(agent='general').inc()
             return self._handle_general(sub_intent, message)
 
         else:
+            CHAT_AGENT_ROUTING_TOTAL.labels(agent='fallback').inc()
             return ResponseBuilder.general_response(
                 "무엇을 도와드릴까요?"
             )
@@ -788,6 +819,7 @@ class MainOrchestrator:
                     context.setdefault('has_search_results', False)
                     context.setdefault('has_user_image', False)
                     context.setdefault('cart_item_count', 0)
+                    CHAT_SESSION_OPERATIONS_TOTAL.labels(operation='load').inc()
                     return context
                 except json.JSONDecodeError:
                     logger.warning(f"Corrupted session data for {self.session_id}, creating new context")
@@ -795,6 +827,7 @@ class MainOrchestrator:
                     self.redis.delete(key)
 
             # 새 세션 초기화
+            CHAT_SESSION_OPERATIONS_TOTAL.labels(operation='create').inc()
             return {
                 "session_id": self.session_id,
                 "user_id": self.user_id,
@@ -823,6 +856,7 @@ class MainOrchestrator:
             context['last_activity'] = datetime.now().isoformat()
             key = f"agent:session:{self.session_id}"
             self.redis.setex(key, TTL_SESSION, json.dumps(context, default=str))
+            CHAT_SESSION_OPERATIONS_TOTAL.labels(operation='save').inc()
 
         except Exception as e:
             logger.warning(f"Failed to save context: {e}")

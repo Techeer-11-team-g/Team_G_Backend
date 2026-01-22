@@ -104,7 +104,7 @@ class BaseUploadedImageSerializer(serializers.ModelSerializer):
     def get_uploaded_image_url(self, obj):
         """이미지 파일의 절대 경로(URL)를 반환."""
         if obj.uploaded_image_url:
-            return obj.uploaded_image_url.url
+            return obj.uploaded_image_url
         return ''
 
 
@@ -328,7 +328,7 @@ class UploadedImageInfoSerializer(serializers.ModelSerializer):
 
     def get_url(self, obj):
         if obj.uploaded_image_url:
-            return obj.uploaded_image_url  # URLField는 이미 문자열
+            return obj.uploaded_image_url
         return ''
 
 
@@ -389,7 +389,7 @@ class AnalysisRefineImageSerializer(serializers.ModelSerializer):
 
     def get_uploaded_image_url(self, obj):
         if obj.uploaded_image_url:
-            return obj.uploaded_image_url.url
+            return obj.uploaded_image_url
         return ''
 
 

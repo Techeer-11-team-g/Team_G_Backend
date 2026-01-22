@@ -13,7 +13,9 @@ Extracts detailed fashion attributes from cropped item images:
 """
 
 import base64
+import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -175,9 +177,6 @@ Important:
 
     def _parse_response(self, content: str) -> FashionAttributes:
         """Parse GPT-4V response into FashionAttributes."""
-        import json
-        import re
-
         try:
             # Try to extract JSON from response
             # Handle case where response includes markdown code blocks
@@ -226,8 +225,6 @@ Important:
         Returns:
             리랭킹된 상품 리스트
         """
-        import httpx
-
         if not candidates or len(candidates) <= 1:
             return candidates[:top_k]
 
@@ -287,7 +284,6 @@ Most similar first. Only include the numbers, no explanation."""
             logger.debug(f"Claude rerank response: {ranking_text}")
 
             # 숫자 추출
-            import re
             numbers = re.findall(r'\d+', ranking_text)
             ranking = [int(n) - 1 for n in numbers if int(n) <= len(candidates[:10])]
 

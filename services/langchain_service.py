@@ -236,8 +236,6 @@ Respond in JSON format:
 
         try:
             response = self.chat(prompt)
-            # Parse JSON from response
-            import json
             # Try to extract JSON from response
             start = response.find('{')
             end = response.rfind('}') + 1
@@ -262,10 +260,6 @@ Respond in JSON format:
         Returns:
             Parsed action with filters including color, brand, price
         """
-        import json
-        import logging
-        logger = logging.getLogger(__name__)
-
         prompt = f"""다음 사용자 요청을 분석하여 이미지 분석 결과 재검색에 필요한 정보를 추출하세요.
 
 사용자 요청: "{query}"
@@ -420,7 +414,6 @@ Respond in JSON format:
 
         try:
             response = self.chat(prompt)
-            import json
             start = response.find('{')
             end = response.rfind('}') + 1
             if start >= 0 and end > start:

@@ -308,7 +308,7 @@ def _generate_image_embedding(detected_obj) -> Optional[list]:
             logger.warning(f"No image URL for object {detected_obj.id}")
             return None
 
-        image_url = uploaded_image.uploaded_image_url.url
+        image_url = uploaded_image.uploaded_image_url
 
         # bbox 좌표 확인
         has_bbox = (

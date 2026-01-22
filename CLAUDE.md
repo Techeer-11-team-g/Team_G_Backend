@@ -69,11 +69,40 @@ Service modules:
 - `vision_service.py` - Google Vision API wrapper with category normalization
 - `embedding_service.py` - Marqo-FashionCLIP 512-dim embeddings (Apple Silicon compatible with Float64)
 - `gpt4v_service.py` - Claude Vision for attribute extraction + ranking
-- `opensearch_client.py` - Vector search with k-NN (HNSW algorithm, cosine similarity)
+- `opensearch_client.py` - Thin wrapper re-exporting from `services/search/` (backward compatible)
 - `langchain_service.py` - LLM orchestration via LangChain
 - `fashn_service.py` - Virtual fitting integration
 - `redis_service.py` - Analysis state management (PENDING → RUNNING → DONE/FAILED)
-- `metrics.py` - Prometheus custom metrics
+- `metrics.py` - Prometheus custom metrics (process, system, business)
+
+### OpenSearch Search Module (`services/search/`)
+Modular search implementation split from monolithic `opensearch_client.py`:
+
+```python
+# Recommended: import from services/search/
+from services.search import OpenSearchService, get_client
+from services.search.strategies import SearchStrategies
+from services.search.utils import RELATED_CATEGORIES, COLOR_KEYWORDS
+
+# Backward compatible: old import path still works
+from services.opensearch_client import OpenSearchClient, get_client
+```
+
+Module structure:
+- `client.py` - Base OpenSearchClient class, connection management
+- `strategies.py` - 6 search strategies (k-NN, hybrid, attribute-based, etc.)
+- `utils.py` - Constants (RELATED_CATEGORIES, COLOR_KEYWORDS) and helpers
+
+### Common Utilities (`common/`)
+Shared utilities for pagination and serializer optimization:
+
+```python
+from common import StandardPagination, paginate_queryset
+from common import PrefetchMixin, DynamicFieldsMixin
+```
+
+- `pagination.py` - StandardPagination (page_size=20), CursorPaginationMixin
+- `serializers.py` - PrefetchMixin (auto setup_eager_loading), DynamicFieldsMixin
 
 ### Celery Task Pipeline (`analyses/tasks/`)
 Uses Celery Group/Chord pattern for parallel per-object processing:
@@ -101,6 +130,11 @@ Three named queues with routing in `config/celery.py`:
 - `analyses/` - Core image analysis pipeline
   - Models: UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping, SelectedProduct
   - Views: UploadedImageView, ImageAnalysisView
+- `agents/` - AI 패션 어시스턴트 챗봇 (LLM 기반)
+  - `orchestrator.py` - 메인 오케스트레이터: Intent Classification → Sub-Agent 라우팅
+  - `sub_agents/` - SearchAgent, FittingAgent, CommerceAgent
+  - `response_builder.py` - 응답 포맷 생성기
+  - `schemas.py` - Intent 분류 스키마 및 지원 카테고리
 - `fittings/` - Virtual fitting (UserImage, FittingImage with status caching)
 - `products/` - Product catalog (Product, SizeCode)
 - `orders/` - Order management (Order, OrderItem, CartItem with soft delete)
@@ -140,6 +174,11 @@ POST   /orders                   - Create order
 GET    /orders                   - List orders
 GET    /orders/<id>              - Get order details
 PATCH  /orders/<id>              - Update order status
+
+POST   /chat                     - AI 채팅 (메시지 + 이미지)
+POST   /chat/status              - 분석/피팅 상태 폴링
+GET    /chat/sessions/<id>       - 세션 조회
+DELETE /chat/sessions/<id>       - 세션 삭제
 
 POST   /auth/register            - User signup
 POST   /auth/login               - JWT token generation
@@ -203,10 +242,20 @@ POST /api/v1/analyses
 
 ### Metrics (Prometheus)
 Custom metrics in `services/metrics.py`:
+
+**Business metrics:**
 - `teamg_analysis_total{status}` - Analysis count by status
 - `teamg_analysis_duration_seconds{stage}` - Pipeline stage latency
 - `teamg_external_api_requests_total{service,status}` - External API calls
 - `teamg_fittings_requested_total{status}` - Fitting requests
+
+**Process/System metrics:**
+- `teamg_process_cpu_percent` - Django process CPU usage
+- `teamg_process_memory_bytes{type=rss|vms}` - Process memory
+- `teamg_system_cpu_percent` - System-wide CPU usage
+- `teamg_system_memory_bytes{type=total|available|used}` - System memory
+
+Call `update_process_metrics()` to refresh process metrics (auto-called by middleware).
 
 ### Logging (Loki)
 Structured JSON logs with custom `JsonFormatter`. Use `extra` dict for structured fields:
@@ -223,6 +272,8 @@ logger.info(
 ```
 
 `RequestLoggingMiddleware` (`config/middleware.py`) auto-logs all API requests/responses.
+
+`SkipHealthMetricsFilter` in `config/settings.py` filters noisy logs: `/health/`, `/metrics/`, Celery heartbeat messages.
 
 ### Health Check
 - `GET /health/` - Application health status
@@ -249,3 +300,12 @@ Model is pre-loaded at Celery worker startup via `worker_process_init` signal in
 
 ### GCS Direct Upload Optimization
 When `auto_analyze=True`, base64-encoded images are passed directly to analysis tasks, skipping the GCS round-trip for faster processing.
+
+### AI Agent (Chat) Architecture
+`agents/orchestrator.py`의 MainOrchestrator가 메인 진입점:
+1. Intent Classification: 키워드 기반 + LLM Function Calling (LangChain)
+2. Sub-Agent 라우팅: SearchAgent, FittingAgent, CommerceAgent
+3. 세션 상태: Redis에 저장 (2시간 TTL, `agent:session:{id}` 키 패턴)
+4. 대화 이력: `agent:session:{id}:turns` 리스트 (최대 20턴)
+
+Intent 분류 우선순위: commerce → fitting → general → refine → search
