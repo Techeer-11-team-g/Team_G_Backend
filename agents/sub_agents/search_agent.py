@@ -105,6 +105,10 @@ class SearchAgent:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """검색 요청 처리"""
+        logger.info(
+            f"SearchAgent.handle: sub_intent={sub_intent}, has_image={image is not None}, "
+            f"message='{message[:30]}...', analysis_id={context.get('current_analysis_id')}"
+        )
         try:
             if sub_intent == 'new_search':
                 if image:
@@ -193,14 +197,21 @@ class SearchAgent:
         import uuid
 
         try:
-            # 0. 메시지에서 카테고리/아이템타입 필터 추출
+            # 0. 메시지에서 필터 추출
             search_params = context.get('intent_result', {}).get('search_params', {})
             target_categories = search_params.get('target_categories', [])
             category_filter = target_categories[0] if target_categories else None
-            item_type_filter = search_params.get('item_type')  # 세부 아이템 타입
+            item_type_filter = search_params.get('item_type')
+            pattern_filter = search_params.get('pattern')
+            style_filter = search_params.get('style')
+            material_filter = search_params.get('material')
+            color_filter = search_params.get('color')
 
-            if category_filter or item_type_filter:
-                logger.info(f"Image search with filters: category={category_filter}, item_type={item_type_filter}")
+            logger.info(
+                f"Image search: search_params={search_params}, "
+                f"category={category_filter}, item_type={item_type_filter}, "
+                f"pattern={pattern_filter}, style={style_filter}, material={material_filter}, color={color_filter}"
+            )
 
             # 1. 이미지 업로드
             uploaded_image = UploadedImage.objects.create(
@@ -238,6 +249,10 @@ class SearchAgent:
             # 필터 초기화 (새 필터가 있으면 적용, 없으면 None)
             context['analysis_category_filter'] = category_filter
             context['analysis_item_type_filter'] = item_type_filter
+            context['analysis_pattern_filter'] = pattern_filter
+            context['analysis_style_filter'] = style_filter
+            context['analysis_material_filter'] = material_filter
+            context['analysis_color_filter'] = color_filter
 
             # 텍스트 검색 관련 컨텍스트도 초기화 (이미지 검색과 분리)
             context['last_search_query'] = None
@@ -335,6 +350,50 @@ class SearchAgent:
         '카키': 'khaki', '올리브': 'khaki',
     }
 
+    # 한국어 → 영어 패턴/문양 매핑
+    KOREAN_TO_ENGLISH_PATTERN = {
+        '스트라이프': 'stripe', '줄무늬': 'stripe', '세로줄': 'stripe', '가로줄': 'stripe', '스트라입': 'stripe',
+        '점박이': 'polka dot', '도트': 'polka dot', '폴카도트': 'polka dot', '땡땡이': 'polka dot', '물방울': 'polka dot',
+        '체크': 'check', '격자': 'check', '체크무늬': 'check', '깅엄': 'gingham', '타탄': 'tartan',
+        '무지': 'solid', '솔리드': 'solid', '단색': 'solid', '민무늬': 'plain',
+        '꽃무늬': 'floral', '플로럴': 'floral', '꽃': 'floral', '플라워': 'flower',
+        '페이즐리': 'paisley',
+        '카모': 'camo', '밀리터리': 'military', '위장': 'camo', '아미': 'army',
+        '호피': 'leopard', '레오파드': 'leopard', '표범': 'leopard', '지브라': 'zebra', '얼룩말': 'zebra', '애니멀': 'animal',
+        '로고': 'logo', '프린트': 'print', '그래픽': 'graphic', '레터링': 'lettering',
+        '아가일': 'argyle', '마름모': 'argyle',
+    }
+
+    # 한국어 → 영어 스타일 매핑
+    KOREAN_TO_ENGLISH_STYLE = {
+        '캐주얼': 'casual', '편한': 'casual', '일상': 'casual', '데일리': 'daily',
+        '포멀': 'formal', '정장': 'formal', '격식': 'formal', '오피스': 'office', '비즈니스': 'business',
+        '스포티': 'sporty', '운동': 'sport', '액티브': 'active', '애슬레저': 'athleisure',
+        '빈티지': 'vintage', '레트로': 'retro', '복고': 'retro', '구제': 'vintage',
+        '미니멀': 'minimal', '심플': 'simple', '기본': 'basic', '베이직': 'basic',
+        '스트릿': 'street', '힙합': 'hiphop', '유니크': 'unique',
+        '클래식': 'classic', '정통': 'classic', '트래디셔널': 'traditional',
+        '오버핏': 'overfit', '루즈핏': 'loose', '박시': 'boxy', '와이드': 'wide', '오버사이즈': 'oversized',
+        '슬림핏': 'slim', '타이트': 'tight', '스키니': 'skinny', '피트': 'fit',
+    }
+
+    # 한국어 → 영어 소재 매핑
+    KOREAN_TO_ENGLISH_MATERIAL = {
+        '데님': 'denim', '청': 'denim',
+        '가죽': 'leather', '레더': 'leather', '소가죽': 'leather', '양가죽': 'leather',
+        '니트': 'knit', '울': 'wool', '양모': 'wool', '캐시미어': 'cashmere',
+        '면': 'cotton', '코튼': 'cotton', '순면': 'cotton',
+        '린넨': 'linen', '마': 'linen', '마직': 'linen',
+        '벨벳': 'velvet', '벨루어': 'velour',
+        '코듀로이': 'corduroy', '골덴': 'corduroy',
+        '퍼': 'fur', '털': 'fur', '무스탕': 'shearling', '양털': 'fleece', '플리스': 'fleece',
+        '스웨이드': 'suede',
+        '나일론': 'nylon', '폴리': 'polyester', '폴리에스터': 'polyester',
+        '실크': 'silk', '비단': 'silk', '새틴': 'satin',
+        '트위드': 'tweed',
+        '저지': 'jersey',
+    }
+
     def _normalize_color(self, color: str) -> str:
         """한국어 색상을 영어로 정규화"""
         if not color:
@@ -347,6 +406,130 @@ class SearchAgent:
             return color_lower
         # 한국어 → 영어 변환
         return self.KOREAN_TO_ENGLISH_COLOR.get(color_lower, color_lower)
+
+    def _normalize_pattern(self, pattern: str) -> str:
+        """한국어 패턴을 영어로 정규화"""
+        if not pattern:
+            return None
+        pattern_lower = pattern.lower().strip()
+        # 이미 영어면 그대로 반환
+        if pattern_lower in ['stripe', 'polka dot', 'check', 'solid', 'floral', 'paisley',
+                             'camo', 'leopard', 'zebra', 'animal', 'graphic', 'argyle', 'plain']:
+            return pattern_lower
+        # 한국어 → 영어 변환
+        return self.KOREAN_TO_ENGLISH_PATTERN.get(pattern_lower, pattern_lower)
+
+    def _normalize_style(self, style: str) -> str:
+        """한국어 스타일을 영어로 정규화"""
+        if not style:
+            return None
+        style_lower = style.lower().strip()
+        # 이미 영어면 그대로 반환
+        if style_lower in ['casual', 'formal', 'sporty', 'vintage', 'minimal', 'street',
+                           'classic', 'overfit', 'slim', 'basic', 'office']:
+            return style_lower
+        # 한국어 → 영어 변환
+        return self.KOREAN_TO_ENGLISH_STYLE.get(style_lower, style_lower)
+
+    def _normalize_material(self, material: str) -> str:
+        """한국어 소재를 영어로 정규화"""
+        if not material:
+            return None
+        material_lower = material.lower().strip()
+        # 이미 영어면 그대로 반환
+        if material_lower in ['denim', 'leather', 'wool', 'cotton', 'linen', 'velvet',
+                              'corduroy', 'fur', 'suede', 'polyester', 'silk', 'knit', 'fleece']:
+            return material_lower
+        # 한국어 → 영어 변환
+        return self.KOREAN_TO_ENGLISH_MATERIAL.get(material_lower, material_lower)
+
+    def _filter_results_by_keywords(
+        self,
+        results: List[Dict[str, Any]],
+        pattern: Optional[str] = None,
+        style: Optional[str] = None,
+        material: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        검색 결과를 패턴/스타일/소재 키워드로 필터링
+
+        상품명에 해당 키워드가 포함된 결과만 반환
+        """
+        if not pattern and not style and not material:
+            return results
+
+        # 키워드 → 검색어 매핑 (한글/영문 모두 포함)
+        PATTERN_KEYWORDS = {
+            'stripe': ['스트라이프', 'stripe', '줄무늬', '줄'],
+            'polka_dot': ['도트', 'dot', '점박이', '땡땡이', '물방울'],
+            'polka dot': ['도트', 'dot', '점박이', '땡땡이', '물방울'],
+            'check': ['체크', 'check', '격자', '깅엄', 'gingham'],
+            'solid': ['무지', 'solid', '단색', 'plain'],
+            'floral': ['플로럴', 'floral', '꽃무늬', '꽃', 'flower'],
+            'paisley': ['페이즐리', 'paisley'],
+            'camo': ['카모', 'camo', '밀리터리', 'military', '위장', '아미'],
+            'animal': ['호피', 'leopard', '지브라', 'zebra', '애니멀', 'animal'],
+            'leopard': ['호피', 'leopard', '레오파드'],
+            'graphic': ['그래픽', 'graphic', '프린트', 'print', '로고', 'logo', '레터링'],
+            'argyle': ['아가일', 'argyle', '마름모'],
+        }
+
+        STYLE_KEYWORDS = {
+            'casual': ['캐주얼', 'casual', '데일리', 'daily'],
+            'formal': ['포멀', 'formal', '정장', '오피스', 'office', '비즈니스'],
+            'sporty': ['스포티', 'sporty', '스포츠', 'sport', '애슬레저', 'athleisure'],
+            'vintage': ['빈티지', 'vintage', '레트로', 'retro', '복고', '구제'],
+            'minimal': ['미니멀', 'minimal', '심플', 'simple', '베이직', 'basic'],
+            'street': ['스트릿', 'street', '힙합', '유니크'],
+            'classic': ['클래식', 'classic', '트래디셔널'],
+            'overfit': ['오버핏', 'overfit', '오버사이즈', 'oversized', '루즈', 'loose', '박시', 'boxy', '와이드', 'wide'],
+            'slim': ['슬림', 'slim', '스키니', 'skinny', '타이트', 'tight', '피트', 'fit'],
+        }
+
+        MATERIAL_KEYWORDS = {
+            'denim': ['데님', 'denim', '청바지', '청'],
+            'leather': ['가죽', 'leather', '레더'],
+            'wool': ['울', 'wool', '니트', 'knit', '양모', '캐시미어', 'cashmere'],
+            'cotton': ['코튼', 'cotton', '면', '순면'],
+            'linen': ['린넨', 'linen', '마'],
+            'velvet': ['벨벳', 'velvet', '벨루어'],
+            'corduroy': ['코듀로이', 'corduroy', '골덴'],
+            'fur': ['퍼', 'fur', '털', '무스탕', '양털', 'fleece', '플리스'],
+            'suede': ['스웨이드', 'suede'],
+            'polyester': ['폴리', 'polyester', '나일론', 'nylon'],
+            'silk': ['실크', 'silk', '새틴', 'satin'],
+            'knit': ['니트', 'knit', '울', 'wool'],
+            'fleece': ['플리스', 'fleece', '양털'],
+        }
+
+        def matches_keywords(product_name: str, filter_value: str, keyword_map: dict) -> bool:
+            """상품명에 키워드가 포함되어 있는지 확인"""
+            if not filter_value:
+                return True
+            keywords = keyword_map.get(filter_value.lower(), [filter_value])
+            product_name_lower = product_name.lower()
+            return any(kw.lower() in product_name_lower for kw in keywords)
+
+        filtered = []
+        for result in results:
+            product_name = result.get('product_name', '') or ''
+
+            # 모든 필터 조건 체크
+            if pattern and not matches_keywords(product_name, pattern, PATTERN_KEYWORDS):
+                continue
+            if style and not matches_keywords(product_name, style, STYLE_KEYWORDS):
+                continue
+            if material and not matches_keywords(product_name, material, MATERIAL_KEYWORDS):
+                continue
+
+            filtered.append(result)
+
+        logger.info(
+            f"Keyword filter: pattern={pattern}, style={style}, material={material}, "
+            f"before={len(results)}, after={len(filtered)}"
+        )
+
+        return filtered
 
     @traced("search_agent.text_search")
     def text_search(
@@ -370,18 +553,27 @@ class SearchAgent:
             # 2. 텍스트 임베딩 생성 (한국어 → 영어 변환)
             translated_query = self._translate_to_english(message)
 
-            # 3. 카테고리, 브랜드, 색상 추출
+            # 3. 카테고리, 브랜드, 색상, 패턴, 스타일, 소재 추출
             categories = search_params.get('target_categories', [])
             category = categories[0] if categories else None
             brand = search_params.get('brand')
             color = self._normalize_color(search_params.get('color'))
+            pattern = self._normalize_pattern(search_params.get('pattern'))
+            style = self._normalize_style(search_params.get('style'))
+            material = self._normalize_material(search_params.get('material'))
 
-            # 브랜드/색상이 있으면 검색 쿼리에 포함 (임베딩 품질 향상)
+            # 모든 필터를 검색 쿼리에 포함 (임베딩 품질 향상)
             search_query_parts = []
             if brand:
                 search_query_parts.append(brand)
             if color:
                 search_query_parts.append(color)
+            if pattern:
+                search_query_parts.append(pattern)
+            if style:
+                search_query_parts.append(style)
+            if material:
+                search_query_parts.append(material)
             search_query_parts.append(translated_query)
             search_query = ' '.join(search_query_parts)
 
@@ -389,7 +581,8 @@ class SearchAgent:
 
             logger.info(
                 f"Text search: message='{message}' -> query='{search_query}', "
-                f"category={category}, brand={brand}, color={color}, is_retry={is_retry}"
+                f"category={category}, brand={brand}, color={color}, "
+                f"pattern={pattern}, style={style}, material={material}, is_retry={is_retry}"
             )
 
             # 4. OpenSearch 검색 (브랜드/색상 필터 지원)
@@ -423,7 +616,16 @@ class SearchAgent:
                     "조건에 맞는 상품을 찾지 못했어요. 조건을 바꿔서 다시 찾아볼까요?"
                 )
 
-            # 5. offset 적용하여 결과 슬라이싱
+            # 5. 패턴/스타일/소재 키워드 필터링 (상품명 기반)
+            if pattern or style or material:
+                results = self._filter_results_by_keywords(results, pattern, style, material)
+                if not results:
+                    filter_desc = ', '.join(filter(None, [pattern, style, material]))
+                    return ResponseBuilder.no_results(
+                        f"'{filter_desc}' 조건에 맞는 상품을 찾지 못했어요. 다른 조건으로 찾아볼까요?"
+                    )
+
+            # 6. offset 적용하여 결과 슬라이싱
             sliced_results = results[offset:offset + 5]
 
             # 더 이상 결과가 없으면 처음으로 돌아가기
@@ -481,23 +683,56 @@ class SearchAgent:
         """
         자연어 재분석 / 필터 변경
 
-        두 가지 모드 지원:
+        세 가지 모드 지원:
         1. 이미지 분석 결과 필터 변경: 같은 analysis_id, 필터만 변경
            예: "신발만 보여줘", "코트만 찾아줘"
-        2. 텍스트 검색 조건 변경: 기존 parse_refine_query 활용
+        2. 텍스트 검색 조건 변경: 이전 검색 조건 + 새 필터 병합
+           예: "나이키 운동화" → "빨간색으로" = "나이키 빨간색 운동화"
+        3. 기존 parse_refine_query 활용 (이미지 분석 컨텍스트)
         """
         analysis_id = context.get('current_analysis_id')
         last_search_type = context.get('last_search_type')
 
+        logger.info(
+            f"Refine search: analysis_id={analysis_id}, last_search_type={last_search_type}, "
+            f"has_search_results={context.get('has_search_results')}"
+        )
+
         # 이미지 분석 결과가 있는 경우 - 필터만 변경
         if analysis_id and last_search_type == 'image':
-            return self._refine_image_filter(analysis_id, message, context)
+            # 요청된 카테고리가 이미지 분석 결과에 있는지 확인
+            search_params = context.get('intent_result', {}).get('search_params', {})
+            target_categories = search_params.get('target_categories', [])
+            requested_category = target_categories[0] if target_categories else None
 
-        # 분석 컨텍스트 없으면 텍스트 검색으로 전환
+            # 카테고리가 없거나, 이미지에 해당 카테고리가 있으면 이미지 refine
+            if not requested_category or self._category_exists_in_analysis(analysis_id, requested_category):
+                result = self._refine_image_filter(analysis_id, message, context)
+
+                # 결과가 0개면 텍스트 검색으로 폴백
+                if result.get('type') == 'no_results':
+                    logger.info("Image refine returned 0 results, falling back to text search")
+                    return self.text_search(message, context)
+
+                return result
+            else:
+                # 이미지에 해당 카테고리가 없으면 텍스트 검색으로 전환
+                logger.info(
+                    f"Category '{requested_category}' not found in analysis {analysis_id}, "
+                    "switching to text search"
+                )
+                return self.text_search(message, context)
+
+        # 텍스트 검색 컨텍스트가 있는 경우 - 이전 검색 조건과 병합
+        if last_search_type == 'text' and context.get('last_search_params'):
+            return self._refine_text_search(message, context)
+
+        # 컨텍스트 없는 경우 - 새 텍스트 검색으로 처리
         if not analysis_id:
+            logger.info("Refine search: No context, falling back to new text search")
             return self.text_search(message, context)
 
-        # 기존 refine 로직 (텍스트 기반 재분석)
+        # 기존 refine 로직 (이미지 분석 컨텍스트가 있지만 image 타입이 아닌 경우)
         try:
             from analyses.tasks.refine import parse_refine_query_task
 
@@ -549,7 +784,7 @@ class SearchAgent:
         이미지 분석 결과에서 필터만 변경 (refine)
 
         같은 analysis_id를 유지하면서:
-        - 카테고리 또는 아이템 타입 필터 업데이트
+        - 카테고리, 아이템 타입, 패턴, 스타일, 소재 필터 업데이트
         - shown_product_ids 리셋
         - 새 필터로 결과 반환
         """
@@ -559,13 +794,48 @@ class SearchAgent:
             target_categories = search_params.get('target_categories', [])
             new_category_filter = target_categories[0] if target_categories else None
             new_item_type_filter = search_params.get('item_type')
+            new_pattern_filter = search_params.get('pattern')
+            new_style_filter = search_params.get('style')
+            new_material_filter = search_params.get('material')
+            new_color_filter = search_params.get('color')
 
-            # 메시지에서 직접 카테고리/아이템 타입 추출 (LLM 분류가 누락된 경우 대비)
+            # 메시지에서 직접 필터 추출 (LLM 분류가 누락된 경우 대비)
+            message_lower = message.lower()
+
             if not new_category_filter and not new_item_type_filter:
                 new_category_filter, new_item_type_filter = self._extract_filter_from_message(message)
 
-            if not new_category_filter and not new_item_type_filter:
-                # 필터 없으면 기존 필터 유지하고 다른 상품 보여주기
+            # 패턴/스타일/소재/색상 직접 추출
+            if not new_pattern_filter:
+                for kor, eng in self.KOREAN_TO_ENGLISH_PATTERN.items():
+                    if kor in message_lower:
+                        new_pattern_filter = eng
+                        break
+
+            if not new_style_filter:
+                for kor, eng in self.KOREAN_TO_ENGLISH_STYLE.items():
+                    if kor in message_lower:
+                        new_style_filter = eng
+                        break
+
+            if not new_material_filter:
+                for kor, eng in self.KOREAN_TO_ENGLISH_MATERIAL.items():
+                    if kor in message_lower:
+                        new_material_filter = eng
+                        break
+
+            if not new_color_filter:
+                for kor, eng in self.KOREAN_TO_ENGLISH_COLOR.items():
+                    if kor in message_lower:
+                        new_color_filter = eng
+                        break
+
+            # 필터가 하나도 없으면 다른 상품 보여주기
+            has_any_filter = any([
+                new_category_filter, new_item_type_filter, new_pattern_filter,
+                new_style_filter, new_material_filter, new_color_filter
+            ])
+            if not has_any_filter:
                 return self.retry_image_search(analysis_id, context)
 
             # 2. 컨텍스트 필터 업데이트
@@ -573,13 +843,29 @@ class SearchAgent:
                 context['analysis_category_filter'] = new_category_filter
             if new_item_type_filter:
                 context['analysis_item_type_filter'] = new_item_type_filter
+            if new_pattern_filter:
+                context['analysis_pattern_filter'] = new_pattern_filter
+            if new_style_filter:
+                context['analysis_style_filter'] = new_style_filter
+            if new_material_filter:
+                context['analysis_material_filter'] = new_material_filter
+            if new_color_filter:
+                context['analysis_color_filter'] = new_color_filter
 
             # 3. shown_product_ids 리셋 (새 필터이므로 처음부터)
             context['shown_product_ids'] = []
 
+            # 적용할 필터들
+            filter_parts = list(filter(None, [
+                new_pattern_filter, new_style_filter, new_material_filter,
+                new_color_filter, new_item_type_filter, new_category_filter
+            ]))
+
             logger.info(
                 f"Refine image filter: analysis_id={analysis_id}, "
-                f"category={new_category_filter}, item_type={new_item_type_filter}"
+                f"category={new_category_filter}, item_type={new_item_type_filter}, "
+                f"pattern={new_pattern_filter}, style={new_style_filter}, "
+                f"material={new_material_filter}, color={new_color_filter}"
             )
 
             # 4. 새 필터로 결과 조회
@@ -589,19 +875,66 @@ class SearchAgent:
                 item_type_filter=new_item_type_filter or context.get('analysis_item_type_filter')
             )
 
+            # 5. 패턴/스타일/소재/색상 키워드 필터링
+            pattern = self._normalize_pattern(new_pattern_filter or context.get('analysis_pattern_filter'))
+            style = self._normalize_style(new_style_filter or context.get('analysis_style_filter'))
+            material = self._normalize_material(new_material_filter or context.get('analysis_material_filter'))
+            color = self._normalize_color(new_color_filter or context.get('analysis_color_filter'))
+
+            if pattern or style or material or color:
+                # 색상도 키워드 필터링에 추가
+                filtered_products = []
+                for p in products:
+                    product_name = (p.get('product_name', '') or '').lower()
+                    match = True
+
+                    if pattern:
+                        pattern_keywords = self.KOREAN_TO_ENGLISH_PATTERN.get(pattern, [pattern])
+                        if isinstance(pattern_keywords, str):
+                            pattern_keywords = [pattern_keywords, pattern]
+                        if not any(kw.lower() in product_name for kw in pattern_keywords):
+                            match = False
+
+                    if style and match:
+                        style_keywords = self.KOREAN_TO_ENGLISH_STYLE.get(style, [style])
+                        if isinstance(style_keywords, str):
+                            style_keywords = [style_keywords, style]
+                        if not any(kw.lower() in product_name for kw in style_keywords):
+                            match = False
+
+                    if material and match:
+                        material_keywords = self.KOREAN_TO_ENGLISH_MATERIAL.get(material, [material])
+                        if isinstance(material_keywords, str):
+                            material_keywords = [material_keywords, material]
+                        if not any(kw.lower() in product_name for kw in material_keywords):
+                            match = False
+
+                    if color and match:
+                        color_keywords = self.KOREAN_TO_ENGLISH_COLOR.get(color, [color])
+                        if isinstance(color_keywords, str):
+                            color_keywords = [color_keywords, color]
+                        if not any(kw.lower() in product_name for kw in color_keywords):
+                            match = False
+
+                    if match:
+                        filtered_products.append(p)
+
+                products = filtered_products
+                logger.info(f"Image filter keyword filtering: {len(filtered_products)} results after filtering")
+
             if not products:
-                filter_name = new_item_type_filter or new_category_filter
+                filter_name = ', '.join(filter_parts) if filter_parts else '지정한 조건'
                 return ResponseBuilder.no_results(
                     f"이미지에서 {filter_name} 관련 상품을 찾지 못했어요. 다른 조건으로 시도해보세요."
                 )
 
-            # 5. 컨텍스트 업데이트
+            # 6. 컨텍스트 업데이트
             shown_ids = [p.get('product_id') for p in products if p.get('product_id')]
             context['shown_product_ids'] = shown_ids
             context['search_results'] = products
             context['has_search_results'] = True
 
-            filter_name = new_item_type_filter or new_category_filter
+            filter_name = ', '.join(filter_parts[:2]) if filter_parts else '지정한 조건'  # 최대 2개까지 표시
             return ResponseBuilder.search_results(
                 products,
                 f"이미지에서 {filter_name} 관련 상품이에요:"
@@ -613,6 +946,207 @@ class SearchAgent:
                 "refine_error",
                 "필터 적용 중 문제가 발생했어요. 다시 시도해주세요."
             )
+
+    @traced("search_agent.refine_text_search")
+    def _refine_text_search(
+        self,
+        message: str,
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        텍스트 검색 조건 변경 (이전 검색 조건 + 새 필터 병합)
+
+        예시:
+        - "나이키 운동화 찾아줘" → "빨간색으로 찾아줘"
+          = 이전 조건(brand=nike, category=shoes) + 새 조건(color=red)
+        - "검은색 코트 찾아줘" → "다른 브랜드로" → "무신사"
+          = 이전 조건 유지 + 새 조건 병합
+        """
+        try:
+            # 1. 이전 검색 조건 가져오기
+            last_params = context.get('last_search_params', {})
+            last_query = context.get('last_search_query', '')
+
+            # 2. 새 메시지에서 추출된 조건 가져오기
+            new_params = context.get('intent_result', {}).get('search_params', {})
+
+            # 3. 이전 조건과 새 조건 병합 (새 조건이 우선)
+            merged_params = last_params.copy()
+
+            # 새 조건 병합 (None이 아닌 값만)
+            if new_params.get('target_categories'):
+                merged_params['target_categories'] = new_params['target_categories']
+            if new_params.get('color'):
+                merged_params['color'] = new_params['color']
+            if new_params.get('brand'):
+                merged_params['brand'] = new_params['brand']
+            if new_params.get('item_type'):
+                merged_params['item_type'] = new_params['item_type']
+            if new_params.get('pattern'):
+                merged_params['pattern'] = new_params['pattern']
+            if new_params.get('style'):
+                merged_params['style'] = new_params['style']
+            if new_params.get('material'):
+                merged_params['material'] = new_params['material']
+
+            # 4. 메시지에서 직접 필터 추출 (LLM이 놓친 경우 대비)
+            message_lower = message.lower()
+
+            # 색상 추출
+            for kor_color, eng_color in self.KOREAN_TO_ENGLISH_COLOR.items():
+                if kor_color in message_lower:
+                    merged_params['color'] = eng_color
+                    break
+
+            # 브랜드 추출 (주요 브랜드)
+            BRAND_KEYWORDS = {
+                'nike': ['나이키', 'nike'],
+                'adidas': ['아디다스', 'adidas'],
+                'newbalance': ['뉴발란스', 'new balance', '뉴발'],
+                'converse': ['컨버스', 'converse'],
+                'vans': ['반스', 'vans'],
+                'zara': ['자라', 'zara'],
+                'uniqlo': ['유니클로', 'uniqlo'],
+                'musinsa': ['무신사', 'musinsa'],
+            }
+            for brand, keywords in BRAND_KEYWORDS.items():
+                if any(kw in message_lower for kw in keywords):
+                    merged_params['brand'] = brand
+                    break
+
+            # 패턴 추출
+            for kor_pattern, eng_pattern in self.KOREAN_TO_ENGLISH_PATTERN.items():
+                if kor_pattern in message_lower:
+                    merged_params['pattern'] = eng_pattern
+                    break
+
+            # 스타일 추출
+            for kor_style, eng_style in self.KOREAN_TO_ENGLISH_STYLE.items():
+                if kor_style in message_lower:
+                    merged_params['style'] = eng_style
+                    break
+
+            # 소재 추출
+            for kor_material, eng_material in self.KOREAN_TO_ENGLISH_MATERIAL.items():
+                if kor_material in message_lower:
+                    merged_params['material'] = eng_material
+                    break
+
+            logger.info(
+                f"Refine text search: last_query='{last_query}', "
+                f"last_params={last_params}, new_params={new_params}, "
+                f"merged_params={merged_params}"
+            )
+
+            # 5. 병합된 조건으로 검색
+            # context의 intent_result에 병합된 params 설정
+            context['intent_result'] = context.get('intent_result', {})
+            context['intent_result']['search_params'] = merged_params
+
+            # 6. 검색 쿼리 구성 (이전 쿼리 + 새 조건)
+            # 이전 쿼리에서 조건 키워드 추출하여 재사용
+            search_query = last_query
+
+            # 새로 추가된 필터 표시용
+            filter_desc_parts = []
+            if merged_params.get('color') and merged_params.get('color') != last_params.get('color'):
+                filter_desc_parts.append(merged_params['color'])
+            if merged_params.get('brand') and merged_params.get('brand') != last_params.get('brand'):
+                filter_desc_parts.append(merged_params['brand'])
+            if merged_params.get('pattern') and merged_params.get('pattern') != last_params.get('pattern'):
+                filter_desc_parts.append(merged_params['pattern'])
+            if merged_params.get('style') and merged_params.get('style') != last_params.get('style'):
+                filter_desc_parts.append(merged_params['style'])
+            if merged_params.get('material') and merged_params.get('material') != last_params.get('material'):
+                filter_desc_parts.append(merged_params['material'])
+
+            # 7. 텍스트 검색 실행
+            # 필터 추출 및 정규화
+            categories = merged_params.get('target_categories', [])
+            category = categories[0] if categories else None
+            brand = merged_params.get('brand')
+            color = self._normalize_color(merged_params.get('color'))
+            pattern = self._normalize_pattern(merged_params.get('pattern'))
+            style = self._normalize_style(merged_params.get('style'))
+            material = self._normalize_material(merged_params.get('material'))
+
+            # 임베딩 쿼리 구성 (모든 필터 포함)
+            query_parts = []
+            if brand:
+                query_parts.append(brand)
+            if color:
+                query_parts.append(color)
+            if pattern:
+                query_parts.append(pattern)
+            if style:
+                query_parts.append(style)
+            if material:
+                query_parts.append(material)
+            query_parts.append(self._translate_to_english(last_query))
+            search_query_for_embedding = ' '.join(query_parts)
+
+            text_embedding = self.embedding_service.get_text_embedding(search_query_for_embedding)
+
+            # 8. OpenSearch 검색
+            if (brand or color) and category:
+                results = self.opensearch.search_brand_vector_color(
+                    embedding=text_embedding,
+                    category=category,
+                    brand=brand,
+                    color=color,
+                    k=100,
+                    search_k=500
+                )
+            elif category:
+                results = self.opensearch.search_similar_products_hybrid(
+                    embedding=text_embedding,
+                    category=category,
+                    k=100,
+                    search_k=500
+                )
+            else:
+                results = self.opensearch.search_by_vector(
+                    embedding=text_embedding,
+                    k=100
+                )
+
+            if not results:
+                # 결과 0개: 이전 조건 없이 새 검색으로 폴백
+                logger.info("Text refine returned 0 results with merged params, trying new search")
+                # 컨텍스트를 초기화하고 새 텍스트 검색
+                context['last_search_params'] = None
+                context['last_search_query'] = None
+                return self.text_search(message, context)
+
+            # 9. 패턴/스타일/소재 키워드 필터링
+            if pattern or style or material:
+                results = self._filter_results_by_keywords(results, pattern, style, material)
+                if not results:
+                    # 필터링 후 0개: 필터 없이 다시 시도
+                    logger.info("Text refine returned 0 results after keyword filter, trying without filter")
+                    context['last_search_params'] = None
+                    context['last_search_query'] = None
+                    return self.text_search(message, context)
+
+            # 10. 결과 반환
+            normalized_results = self._normalize_search_results(results[:5])
+            context['search_results'] = normalized_results
+            context['has_search_results'] = True
+            context['last_search_params'] = merged_params  # 병합된 조건 저장
+            # last_search_query는 원래 검색어 유지
+
+            # 결과 메시지 구성
+            if filter_desc_parts:
+                result_message = f"'{last_query}'에서 {', '.join(filter_desc_parts)} 조건으로 다시 찾았어요:"
+            else:
+                result_message = f"'{last_query}' 조건을 변경해서 찾았어요:"
+
+            return ResponseBuilder.search_results(normalized_results, result_message)
+
+        except Exception as e:
+            logger.error(f"Refine text search error: {e}", exc_info=True)
+            # 에러 시 새 검색으로 fallback
+            return self.text_search(message, context)
 
     def _extract_filter_from_message(self, message: str) -> tuple:
         """
@@ -653,6 +1187,63 @@ class SearchAgent:
                 return category, None
 
         return None, None
+
+    def _get_available_categories_in_analysis(self, analysis_id: int) -> List[str]:
+        """
+        이미지 분석 결과에서 검출된 카테고리 목록 조회
+
+        Args:
+            analysis_id: 분석 ID
+
+        Returns:
+            검출된 카테고리 목록 (예: ['shoes', 'top', 'outer'])
+        """
+        from analyses.models import DetectedObject
+
+        try:
+            categories = DetectedObject.objects.filter(
+                uploaded_image__analyses__id=analysis_id
+            ).values_list('object_category', flat=True).distinct()
+
+            return list(categories)
+        except Exception as e:
+            logger.error(f"Error getting available categories: {e}")
+            return []
+
+    def _category_exists_in_analysis(self, analysis_id: int, category: str) -> bool:
+        """
+        이미지 분석 결과에 해당 카테고리가 있는지 확인
+
+        Args:
+            analysis_id: 분석 ID
+            category: 확인할 카테고리
+
+        Returns:
+            카테고리 존재 여부
+        """
+        # 카테고리 매핑 (사용자 입력 → DB 카테고리)
+        CATEGORY_MAPPING = {
+            'shoes': ['shoes'],
+            'top': ['top'],
+            'bottom': ['bottom'],
+            'pants': ['bottom'],
+            'outer': ['outerwear'],
+            'outerwear': ['outerwear'],
+            'bag': ['bag'],
+            'hat': ['hat'],
+            'dress': ['dress'],
+            'skirt': ['skirt', 'dress'],
+        }
+
+        available = self._get_available_categories_in_analysis(analysis_id)
+        target_categories = CATEGORY_MAPPING.get(category, [category])
+
+        exists = any(cat in available for cat in target_categories)
+        logger.info(
+            f"Category check: {category} → {target_categories}, "
+            f"available={available}, exists={exists}"
+        )
+        return exists
 
     @traced("search_agent.similar_search")
     def similar_search(self, context: Dict[str, Any]) -> Dict[str, Any]:

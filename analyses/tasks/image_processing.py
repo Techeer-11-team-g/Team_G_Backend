@@ -81,6 +81,10 @@ def crop_image(
     # 이미지 크롭
     cropped = image.crop((crop_x_min, crop_y_min, crop_x_max, crop_y_max))
 
+    # RGBA → RGB 변환 (JPEG는 알파 채널 미지원)
+    if cropped.mode == 'RGBA':
+        cropped = cropped.convert('RGB')
+
     # JPEG으로 인코딩
     output = io.BytesIO()
     cropped.save(output, format='JPEG', quality=ImageConfig.JPEG_QUALITY)
@@ -160,6 +164,10 @@ def resize_image_if_needed(
 
     # 비율 유지하며 리사이즈
     image.thumbnail((max_width, max_height), Image.LANCZOS)
+
+    # RGBA → RGB 변환 (JPEG는 알파 채널 미지원)
+    if image.mode == 'RGBA':
+        image = image.convert('RGB')
 
     output = io.BytesIO()
     image.save(output, format='JPEG', quality=ImageConfig.JPEG_QUALITY)

@@ -38,6 +38,7 @@ class ChatView(APIView):
             # 요청 파싱
             message = request.data.get('message', '')
             session_id = request.data.get('session_id')
+            analysis_id = request.data.get('analysis_id')  # 이전 분석 ID (필터 변경용)
             image_file = request.FILES.get('image')
 
             # 이미지 바이트 추출
@@ -58,7 +59,8 @@ class ChatView(APIView):
             # 오케스트레이터 초기화
             orchestrator = MainOrchestrator(
                 user_id=request.user.id,
-                session_id=session_id
+                session_id=session_id,
+                analysis_id=analysis_id  # 이전 분석 컨텍스트 유지용
             )
 
             # 메시지 처리 (async → sync 변환)

@@ -769,6 +769,10 @@ def _crop_image(
 
     cropped = image.crop((crop_x_min, crop_y_min, crop_x_max, crop_y_max))
 
+    # RGBA → RGB 변환 (JPEG는 알파 채널 미지원)
+    if cropped.mode == 'RGBA':
+        cropped = cropped.convert('RGB')
+
     output = io.BytesIO()
     cropped.save(output, format='JPEG', quality=ImageConfig.JPEG_QUALITY)
     return output.getvalue(), pixel_bbox

@@ -328,7 +328,7 @@ class UploadedImageInfoSerializer(serializers.ModelSerializer):
 
     def get_url(self, obj):
         if obj.uploaded_image_url:
-            return obj.uploaded_image_url.url
+            return obj.uploaded_image_url  # URLField는 이미 문자열
         return ''
 
 
