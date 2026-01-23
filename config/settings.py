@@ -178,6 +178,7 @@ CELERY_TIMEZONE = 'Asia/Seoul'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
 CELERY_TASK_ALWAYS_EAGER = False
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False  # Django 로깅 설정 사용
 
 # =============================================================================
 # OpenSearch Configuration
@@ -303,9 +304,13 @@ if LOKI_ENABLED:
         _log_handlers['loki'] = {
             'class': 'logging_loki.LokiHandler',
             'url': LOKI_URL,
-            'tags': {'app': 'team-g-backend'},
+            'tags': {'app': 'team-g-backend', 'env': os.getenv('ENV', 'local')},
             'version': '1',
+            'formatter': 'json',  # JSON 구조화 로깅
         }
+        # 프로덕션에서는 console도 JSON으로 (로그 수집기 파싱용)
+        if os.getenv('ENV') == 'production':
+            _log_handlers['console']['formatter'] = 'json'
         _active_handlers = ['console', 'file', 'loki']
     except ImportError:
         _active_handlers = ['console', 'file']
@@ -315,6 +320,31 @@ else:
 # Custom JSON Formatter to include extra fields
 import logging
 import json as json_module
+
+
+class SkipHealthMetricsFilter(logging.Filter):
+    """Filter out health check, metrics endpoint, and other noisy logs."""
+
+    SKIP_PATHS = ['/metrics', '/health/', '/favicon.ico']
+    SKIP_PATTERNS = [
+        'HEAD ',  # HEAD 요청
+        'heartbeat',  # Celery heartbeat
+        'pidbox',  # Celery pidbox (control messages)
+        'celery@',  # Celery worker 상태 메시지
+        'mingle:',  # Celery mingle
+        'connected to',  # 연결 메시지
+        'ready.',  # ready 메시지
+    ]
+
+    def filter(self, record):
+        message = record.getMessage()
+        # Skip health/metrics paths
+        if any(path in message for path in self.SKIP_PATHS):
+            return False
+        # Skip noisy patterns
+        if any(pattern.lower() in message.lower() for pattern in self.SKIP_PATTERNS):
+            return False
+        return True
 
 
 class JsonFormatter(logging.Formatter):
@@ -360,12 +390,23 @@ LOGGING = {
             '()': JsonFormatter,
         },
     },
+    'filters': {
+        'skip_health_metrics': {
+            '()': SkipHealthMetricsFilter,
+        },
+    },
     'handlers': _log_handlers,
     'root': {
         'handlers': _active_handlers,
         'level': 'INFO',
     },
     'loggers': {
+        'django.server': {
+            'handlers': _active_handlers,
+            'level': 'INFO',
+            'filters': ['skip_health_metrics'],
+            'propagate': False,
+        },
         'django': {
             'handlers': _active_handlers,
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
@@ -374,6 +415,7 @@ LOGGING = {
         'celery': {
             'handlers': _active_handlers,
             'level': 'INFO',
+            'filters': ['skip_health_metrics'],
             'propagate': False,
         },
         'analyses': {

@@ -37,6 +37,7 @@ from .tasks import (
     parse_refine_query_task,
     refine_single_object,
     upload_image_to_gcs_task,
+    extract_style_tags_task,
 )
 from .constants import CATEGORY_ALIASES
 from .utils import create_span, expand_category_aliases
@@ -59,6 +60,135 @@ class UploadedImageView(APIView):
     """
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [IsAuthenticated]
+
+    def _validate_file(self, file):
+        """
+        파일 유효성 검사.
+
+        Returns:
+            None if valid, Response with error if invalid
+        """
+        from .constants import ImageConfig
+
+        if not file:
+            return Response(
+                {'error': {'file': ['파일이 필요합니다.']}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if file.size > ImageConfig.MAX_FILE_SIZE_MB * 1024 * 1024:
+            return Response(
+                {'error': {'file': [f'파일 크기는 {ImageConfig.MAX_FILE_SIZE_MB}MB 이하여야 합니다.']}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if file.content_type not in ImageConfig.ALLOWED_CONTENT_TYPES:
+            return Response(
+                {'error': {'file': ['JPG, PNG, WEBP 파일만 업로드 가능합니다.']}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return None
+
+    def _process_auto_analyze(self, image_b64, file, user_id):
+        """
+        auto_analyze=True 처리: GCS 업로드와 분석을 병렬로 시작.
+
+        Returns:
+            Response with analysis info
+        """
+        from users.models import User
+        from .models import ImageAnalysis
+
+        user = None
+        if user_id:
+            try:
+                user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                pass
+
+        uploaded_image = UploadedImage.objects.create(
+            user=user,
+            uploaded_image_url='pending',
+        )
+        uploaded_image_id = uploaded_image.id
+
+        analysis = ImageAnalysis.objects.create(
+            uploaded_image=uploaded_image,
+            image_analysis_status=ImageAnalysis.Status.PENDING,
+        )
+
+        # 트레이스 컨텍스트 전파를 위한 헤더 생성
+        from opentelemetry.propagate import inject
+        trace_headers = {}
+        inject(trace_headers)
+
+        # 세 태스크를 병렬 실행 (멀티스레드 워커가 동시 처리)
+        upload_image_to_gcs_task.apply_async(
+            args=[image_b64, file.name, file.content_type, user_id],
+            kwargs={'uploaded_image_id': uploaded_image_id},
+            headers=trace_headers,
+        )
+        process_image_analysis.apply_async(
+            args=[str(analysis.id), None],
+            kwargs={'user_id': user_id, 'image_b64': image_b64},
+            headers=trace_headers,
+        )
+        extract_style_tags_task.apply_async(
+            args=[uploaded_image_id, image_b64],
+            headers=trace_headers,
+        )
+
+        logger.info(
+            "이미지 업로드 및 분석 시작 (병렬 모드)",
+            extra={
+                'event': 'image_upload_with_analysis',
+                'user_id': user_id,
+                'uploaded_image_id': uploaded_image_id,
+                'analysis_id': str(analysis.id),
+                'file_name': file.name,
+                'file_size': file.size,
+            }
+        )
+        IMAGES_UPLOADED_TOTAL.inc()
+
+        return Response({
+            'uploaded_image_id': uploaded_image_id,
+            'uploaded_image_url': 'pending',
+            'created_at': uploaded_image.created_at.isoformat(),
+            'auto_analyze': True,
+            'analysis_id': analysis.id,
+            'analysis_status': 'PENDING',
+            'polling': {
+                'status_url': f'/api/v1/analyses/{analysis.id}/status',
+                'result_url': f'/api/v1/analyses/{analysis.id}',
+            }
+        }, status=status.HTTP_201_CREATED)
+
+    def _process_upload_only(self, image_b64, file, user_id):
+        """
+        auto_analyze=False 처리: GCS 업로드만.
+
+        Returns:
+            Response with upload result
+        """
+        result = upload_image_to_gcs_task.apply_async(
+            args=[image_b64, file.name, file.content_type, user_id],
+        ).get(timeout=60)
+
+        logger.info(
+            "이미지 업로드 완료",
+            extra={
+                'event': 'image_uploaded',
+                'user_id': user_id,
+                'uploaded_image_id': result.get('uploaded_image_id'),
+                'file_name': file.name,
+                'file_size': file.size,
+            }
+        )
+        IMAGES_UPLOADED_TOTAL.inc()
+
+        return Response(result, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         tags=["Analyses"],
@@ -89,8 +219,6 @@ class UploadedImageView(APIView):
         auto_analyze=true 시 GCS 업로드와 분석을 병렬로 시작
         """
         import base64
-        from .constants import ImageConfig
-        from .models import ImageAnalysis
 
         with create_span(TRACER_NAME, "api_upload_image") as ctx:
             ctx.set("http.method", "POST")
@@ -98,25 +226,9 @@ class UploadedImageView(APIView):
 
             # 1. 파일 유효성 검사
             file = request.FILES.get('file')
-            if not file:
-                return Response(
-                    {'error': {'file': ['파일이 필요합니다.']}},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # 파일 크기 제한
-            if file.size > ImageConfig.MAX_FILE_SIZE_MB * 1024 * 1024:
-                return Response(
-                    {'error': {'file': [f'파일 크기는 {ImageConfig.MAX_FILE_SIZE_MB}MB 이하여야 합니다.']}},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # 허용된 파일 형식 검사
-            if file.content_type not in ImageConfig.ALLOWED_CONTENT_TYPES:
-                return Response(
-                    {'error': {'file': ['JPG, PNG, WEBP 파일만 업로드 가능합니다.']}},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            validation_error = self._validate_file(file)
+            if validation_error:
+                return validation_error
 
             # auto_analyze 옵션 확인
             auto_analyze = request.data.get('auto_analyze', '').lower() in ('true', '1', 'yes')
@@ -134,104 +246,17 @@ class UploadedImageView(APIView):
             user_id = request.user.id if request.user.is_authenticated else None
 
             # 4. Celery 태스크 실행
+            # CeleryInstrumentor가 자동으로 trace context 전파 (propagate_headers=True)
             try:
-                from opentelemetry.propagate import inject
-                headers = {}
-                inject(headers)
-
                 if auto_analyze:
-                    # 진짜 병렬 처리: GCS 업로드와 분석을 동시에 시작
-                    from users.models import User
-
-                    # 1. UploadedImage 레코드 먼저 생성 (placeholder URL)
-                    user = None
-                    if user_id:
-                        try:
-                            user = User.objects.get(id=user_id)
-                        except User.DoesNotExist:
-                            pass
-
-                    uploaded_image = UploadedImage.objects.create(
-                        user=user,
-                        uploaded_image_url='pending',  # GCS 업로드 완료 시 업데이트됨
-                    )
-                    uploaded_image_id = uploaded_image.id
-
-                    # 2. ImageAnalysis 레코드 생성
-                    analysis = ImageAnalysis.objects.create(
-                        uploaded_image=uploaded_image,
-                        image_analysis_status=ImageAnalysis.Status.PENDING,
-                    )
-
-                    # 3. GCS 업로드 태스크 비동기 시작 (기존 레코드 업데이트 모드)
-                    upload_image_to_gcs_task.apply_async(
-                        args=[image_b64, file.name, file.content_type, user_id],
-                        kwargs={'uploaded_image_id': uploaded_image_id},
-                        headers=headers,
-                    )
-
-                    # 4. 분석 태스크 비동기 시작 (image_b64 직접 전달로 GCS 다운로드 생략)
-                    #    분석은 image_b64를 사용하므로 GCS URL이 없어도 됨
-                    process_image_analysis.apply_async(
-                        args=[str(analysis.id), None],  # URL은 None (image_b64 사용)
-                        kwargs={'user_id': user_id, 'image_b64': image_b64},
-                        headers=headers,
-                    )
-
-                    logger.info(
-                        "이미지 업로드 및 분석 시작 (병렬 모드)",
-                        extra={
-                            'event': 'image_upload_with_analysis',
-                            'user_id': user_id,
-                            'uploaded_image_id': uploaded_image_id,
-                            'analysis_id': str(analysis.id),
-                            'file_name': file.name,
-                            'file_size': file.size,
-                        }
-                    )
-                    IMAGES_UPLOADED_TOTAL.inc()
-
-                    ctx.set("uploaded_image_id", uploaded_image_id)
-                    ctx.set("analysis_id", analysis.id)
+                    response = self._process_auto_analyze(image_b64, file, user_id)
                     ctx.set("parallel_mode", True)
                     ctx.set("status", "success")
-
-                    return Response({
-                        'uploaded_image_id': uploaded_image_id,
-                        'uploaded_image_url': 'pending',  # GCS 업로드 진행 중
-                        'created_at': uploaded_image.created_at.isoformat(),
-                        'auto_analyze': True,
-                        'analysis_id': analysis.id,
-                        'analysis_status': 'PENDING',
-                        'polling': {
-                            'status_url': f'/api/v1/analyses/{analysis.id}/status',
-                            'result_url': f'/api/v1/analyses/{analysis.id}',
-                        }
-                    }, status=status.HTTP_201_CREATED)
-
+                    return response
                 else:
-                    # 기존 로직: GCS 업로드만
-                    result = upload_image_to_gcs_task.apply_async(
-                        args=[image_b64, file.name, file.content_type, user_id],
-                        headers=headers,
-                    ).get(timeout=60)
-
-                    logger.info(
-                        "이미지 업로드 완료",
-                        extra={
-                            'event': 'image_uploaded',
-                            'user_id': user_id,
-                            'uploaded_image_id': result.get('uploaded_image_id'),
-                            'file_name': file.name,
-                            'file_size': file.size,
-                        }
-                    )
-                    IMAGES_UPLOADED_TOTAL.inc()
-
-                    ctx.set("uploaded_image_id", result.get('uploaded_image_id'))
+                    response = self._process_upload_only(image_b64, file, user_id)
                     ctx.set("status", "success")
-
-                    return Response(result, status=status.HTTP_201_CREATED)
+                    return response
 
             except Exception as e:
                 logger.error(f"Failed to upload image: {e}")
@@ -443,14 +468,10 @@ class ImageAnalysisView(APIView):
         - 대화 히스토리 문맥 유지
         """
         try:
-            from opentelemetry.propagate import inject
-            headers = {}
-            inject(headers)
-
+            # CeleryInstrumentor가 자동으로 trace context 전파
             parsed_query = parse_refine_query_task.apply_async(
                 args=[query, available_categories],
                 kwargs={'analysis_id': analysis_id},  # 대화 문맥용
-                headers=headers,
             ).get(timeout=30)
 
             # v2 다중 요청 처리
@@ -524,18 +545,18 @@ class ImageAnalysisView(APIView):
             uploaded_image = analysis.uploaded_image
             image_url = request.data.get('uploaded_image_url')
             if not image_url and uploaded_image.uploaded_image_url:
-                image_url = uploaded_image.uploaded_image_url.url
+                image_url = uploaded_image.uploaded_image_url
 
-            # Celery task 트리거
+            # Celery task 트리거 (트레이스 컨텍스트 수동 전파)
+            from opentelemetry.propagate import inject
+            trace_headers = {}
+            inject(trace_headers)
+
             try:
-                from opentelemetry.propagate import inject
-                headers = {}
-                inject(headers)
-
                 process_image_analysis.apply_async(
                     args=[str(analysis.id), image_url],
                     kwargs={'user_id': request.user.id if request.user.is_authenticated else None},
-                    headers=headers,
+                    headers=trace_headers,
                 )
                 logger.info(
                     "이미지 분석 시작",
@@ -765,16 +786,19 @@ class FeedView(APIView):
             OpenApiParameter("cursor", type=str, description="페이지네이션용 커서"),
             OpenApiParameter("limit", type=int, default=20, description="페이지당 아이템 수"),
             OpenApiParameter("category", type=str, description="카테고리 필터 (shoes, top, bottom 등)"),
+            OpenApiParameter("style", type=str, description="스타일 태그 필터 (amekaji, casual, street 등)"),
         ],
         responses={200: OpenApiResponse(description="피드 목록")}
     )
     def get(self, request):
         """공개 피드 조회"""
+        from django.db.models import Q
         from .serializers import FeedItemSerializer
 
         cursor = request.query_params.get('cursor')
         limit = min(int(request.query_params.get('limit', 20)), 50)  # 최대 50개
         category = request.query_params.get('category')
+        style = request.query_params.get('style')
 
         # 공개 + 분석 완료된 이미지만 조회
         queryset = UploadedImage.objects.filter(
@@ -795,6 +819,12 @@ class FeedView(APIView):
                 detected_objects__object_category=category,
                 detected_objects__is_deleted=False
             ).distinct()
+
+        # 스타일 태그 필터 (style_tag1 또는 style_tag2에 있으면 매칭)
+        if style:
+            queryset = queryset.filter(
+                Q(style_tag1=style) | Q(style_tag2=style)
+            )
 
         # 커서 기반 페이지네이션
         if cursor:
@@ -827,6 +857,45 @@ class FeedView(APIView):
             response_data['next_cursor'] = next_cursor
 
         return Response(response_data)
+
+
+class FeedStylesView(APIView):
+    """
+    피드 스타일 태그 목록 API
+
+    GET /api/v1/feed/styles - 필터 버튼용 스타일 태그 목록
+    """
+    permission_classes = [IsAuthenticated]
+
+    # 스타일 태그 정의 (버튼 표시용)
+    STYLE_TAGS = [
+        {"value": "amekaji", "label": "아메카지"},
+        {"value": "casual", "label": "캐주얼"},
+        {"value": "street", "label": "스트릿"},
+        {"value": "minimal", "label": "미니멀"},
+        {"value": "formal", "label": "포멀"},
+        {"value": "sporty", "label": "스포티"},
+        {"value": "vintage", "label": "빈티지"},
+        {"value": "cityboy", "label": "시티보이"},
+        {"value": "preppy", "label": "프레피"},
+        {"value": "workwear", "label": "워크웨어"},
+        {"value": "bohemian", "label": "보헤미안"},
+        {"value": "feminine", "label": "페미닌"},
+        {"value": "gothic", "label": "고딕"},
+        {"value": "normcore", "label": "놈코어"},
+    ]
+
+    @extend_schema(
+        tags=["Feed"],
+        summary="스타일 태그 목록 조회",
+        description="피드 필터 버튼용 스타일 태그 목록을 반환합니다.",
+        responses={200: OpenApiResponse(description="스타일 태그 목록")}
+    )
+    def get(self, request):
+        """스타일 태그 목록 반환"""
+        return Response({
+            "styles": self.STYLE_TAGS
+        })
 
 
 class MyHistoryView(APIView):

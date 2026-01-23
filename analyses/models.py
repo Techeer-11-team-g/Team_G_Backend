@@ -46,6 +46,22 @@ class UploadedImage(models.Model):
         help_text='True이면 피드에 공개됨',
     )
 
+    style_tag1 = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        verbose_name='스타일 태그 1',
+        help_text='메인 스타일 태그 (amekaji, casual, street 등)',
+    )
+
+    style_tag2 = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        verbose_name='스타일 태그 2',
+        help_text='서브 스타일 태그',
+    )
+
     class Meta:
         db_table = 'uploaded_image'
         ordering = ['-created_at']

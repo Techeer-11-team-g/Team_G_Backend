@@ -104,7 +104,7 @@ class BaseUploadedImageSerializer(serializers.ModelSerializer):
     def get_uploaded_image_url(self, obj):
         """이미지 파일의 절대 경로(URL)를 반환."""
         if obj.uploaded_image_url:
-            return obj.uploaded_image_url.url
+            return obj.uploaded_image_url
         return ''
 
 
@@ -328,7 +328,7 @@ class UploadedImageInfoSerializer(serializers.ModelSerializer):
 
     def get_url(self, obj):
         if obj.uploaded_image_url:
-            return obj.uploaded_image_url.url
+            return obj.uploaded_image_url
         return ''
 
 
@@ -389,7 +389,7 @@ class AnalysisRefineImageSerializer(serializers.ModelSerializer):
 
     def get_uploaded_image_url(self, obj):
         if obj.uploaded_image_url:
-            return obj.uploaded_image_url.url
+            return obj.uploaded_image_url
         return ''
 
 
@@ -663,11 +663,16 @@ class FeedItemSerializer(serializers.ModelSerializer):
     """피드 아이템 Serializer (업로드 이미지 + 검출 객체들)."""
     user = serializers.SerializerMethodField()
     detected_objects = serializers.SerializerMethodField()
+    analysis_id = serializers.SerializerMethodField()
     analysis_status = serializers.SerializerMethodField()
 
     class Meta:
         model = UploadedImage
-        fields = ['id', 'uploaded_image_url', 'user', 'created_at', 'is_public', 'detected_objects', 'analysis_status']
+        fields = [
+            'id', 'uploaded_image_url', 'user', 'created_at', 'is_public',
+            'style_tag1', 'style_tag2',
+            'analysis_id', 'detected_objects', 'analysis_status'
+        ]
 
     def get_user(self, obj):
         if obj.user:
@@ -675,6 +680,15 @@ class FeedItemSerializer(serializers.ModelSerializer):
                 'id': obj.user.id,
                 'username': obj.user.username,
             }
+        return None
+
+    def get_analysis_id(self, obj):
+        """분석 ID 반환 (에이전트 연동용)."""
+        analysis = getattr(obj, '_prefetched_analysis', None)
+        if analysis is None:
+            analysis = obj.analyses.filter(is_deleted=False).order_by('-created_at').first()
+        if analysis:
+            return analysis.id
         return None
 
     def get_analysis_status(self, obj):
@@ -687,7 +701,7 @@ class FeedItemSerializer(serializers.ModelSerializer):
         return None
 
     def get_detected_objects(self, obj):
-        """검출된 객체들 반환."""
+        """검출된 객체들 반환 (인덱스 포함 - 에이전트에서 "N번 상품" 참조용)."""
         # prefetch된 detected_objects 사용
         detected_objects = getattr(obj, '_prefetched_detected_objects', None)
         if detected_objects is None:
@@ -695,4 +709,11 @@ class FeedItemSerializer(serializers.ModelSerializer):
                 uploaded_image=obj,
                 is_deleted=False
             ).prefetch_related('product_mappings', 'product_mappings__product')
-        return FeedDetectedObjectSerializer(detected_objects, many=True).data
+
+        serialized = FeedDetectedObjectSerializer(detected_objects, many=True).data
+
+        # 인덱스 추가 (1번부터 시작) - 에이전트와 동일한 순서 보장
+        for idx, item in enumerate(serialized, start=1):
+            item['index'] = idx
+
+        return serialized
