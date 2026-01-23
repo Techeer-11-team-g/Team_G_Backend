@@ -25,6 +25,7 @@ from .analysis import (
     process_single_item,
     analysis_complete_callback,
     process_detected_item_task,
+    extract_style_tags_task,
 )
 
 # Refine tasks
@@ -65,6 +66,7 @@ __all__ = [
     'process_single_item',
     'analysis_complete_callback',
     'process_detected_item_task',
+    'extract_style_tags_task',
     # Refine
     'parse_refine_query_task',
     'process_refine_analysis',
