@@ -57,7 +57,7 @@ class FashnService:
         'vto': {
             'model_param': 'model_photo',
             'item_param': 'clothing_photo',
-            'extra': {'ratio': 'auto', 'prompt': 'virtual try on'},
+            'extra': {'ratio': '3:4', 'prompt': 'virtual try on'},
             'has_description': True,
         },
         'vto-bag': {

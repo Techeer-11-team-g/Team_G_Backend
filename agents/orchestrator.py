@@ -43,9 +43,15 @@ class MainOrchestrator:
     5. 세션 상태 관리 (Redis)
     """
 
-    def __init__(self, user_id: int, session_id: Optional[str] = None):
+    def __init__(
+        self,
+        user_id: int,
+        session_id: Optional[str] = None,
+        analysis_id: Optional[int] = None
+    ):
         self.user_id = user_id
         self.session_id = session_id or str(uuid.uuid4())
+        self.analysis_id = analysis_id  # 프론트에서 전달받은 분석 ID (컨텍스트 유지용)
 
         # 서비스 초기화
         self.langchain = get_langchain_service()
@@ -78,6 +84,25 @@ class MainOrchestrator:
         try:
             # 1. 세션 컨텍스트 로드
             context = self._load_context()
+
+            # 1-1. 프론트에서 analysis_id가 전달되면 컨텍스트에 설정
+            # (같은 분석 결과에서 필터만 변경할 때 사용)
+            if self.analysis_id:
+                context['current_analysis_id'] = int(self.analysis_id)
+                context['last_search_type'] = 'image'
+                context['has_search_results'] = True
+                logger.info(f"Using provided analysis_id: {self.analysis_id}")
+
+                # 분석 결과에서 상품 목록 로드 (피드에서 접근 시 필요)
+                if not context.get('search_results'):
+                    products = self._load_products_from_analysis(self.analysis_id)
+                    if products:
+                        context['search_results'] = products
+                        context['last_search_results'] = products
+                        # 보여준 상품 ID 저장 (retry_search에서 제외하기 위함)
+                        shown_ids = [p.get('product_id') for p in products if p.get('product_id')]
+                        context['shown_product_ids'] = shown_ids
+                        logger.info(f"Loaded {len(products)} products from analysis {self.analysis_id}")
 
             # 2. 입력 검증 및 정규화
             message = (message or '').strip()
@@ -211,6 +236,7 @@ class MainOrchestrator:
             return intent_result
 
         # LLM 기반 정교한 분류 시도
+        llm_result = None
         try:
             llm_result = self._llm_classify_intent(message, context)
             if llm_result:
@@ -218,6 +244,23 @@ class MainOrchestrator:
         except Exception as e:
             logger.warning(f"LLM classification fallback: {e}")
             # 키워드 기반 결과 사용
+
+        # 검색 의도인 경우, 정책 기반으로 refine/new_search 결정
+        if intent_result.get('intent') == 'search':
+            # sub_intent가 검색 관련이면 정책 적용
+            current_sub = intent_result.get('sub_intent', '')
+            if current_sub in ['new_search', 'refine', 'retry_search', 'similar']:
+                determined_action = self._determine_search_action(
+                    message, has_image, context, llm_result
+                )
+
+                # retry_search는 유지 (다른 거 보여줘)
+                if current_sub != 'retry_search':
+                    intent_result['sub_intent'] = determined_action
+
+                logger.info(
+                    f"Search action determined: LLM={current_sub} → Policy={determined_action}"
+                )
 
         intent_result['has_image'] = has_image
         return intent_result
@@ -243,6 +286,108 @@ class MainOrchestrator:
                 return category
 
         return None
+
+    def _extract_brand(self, message: str) -> Optional[str]:
+        """메시지에서 브랜드 추출"""
+        message_lower = message.lower()
+
+        brand_keywords = {
+            'nike': ['나이키', 'nike'],
+            'adidas': ['아디다스', 'adidas'],
+            'newbalance': ['뉴발란스', 'new balance', '뉴발'],
+            'converse': ['컨버스', 'converse'],
+            'vans': ['반스', 'vans'],
+            'zara': ['자라', 'zara'],
+            'uniqlo': ['유니클로', 'uniqlo'],
+            'musinsa': ['무신사', 'musinsa'],
+            'covernat': ['커버낫', 'covernat'],
+            'thisisneverthat': ['디스이즈네버댓', 'thisisneverthat'],
+        }
+
+        for brand, keywords in brand_keywords.items():
+            if any(kw in message_lower for kw in keywords):
+                return brand
+
+        return None
+
+    def _determine_search_action(
+        self,
+        message: str,
+        has_image: bool,
+        context: Dict[str, Any],
+        llm_result: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        검색 세션 정책에 따른 refine/new_search 결정
+
+        정책:
+        1. 새 이미지 → 무조건 new_search
+        2. 이미지 세션 (analysis_id 있음) → refine 우선
+        3. 텍스트 세션 → 필터/교체는 refine, 브랜드+카테고리 동시 변경은 new_search
+        4. 텍스트 세션에서 카테고리만 변경 → 브랜드 유지하고 refine
+        """
+        last_search_type = context.get('last_search_type')
+        has_analysis_id = context.get('current_analysis_id') is not None
+        has_search_results = context.get('has_search_results', False)
+
+        # 규칙 1: 새 이미지 → 무조건 new_search
+        if has_image:
+            logger.info("Search action: new_search (new image)")
+            return 'new_search'
+
+        # 컨텍스트가 없으면 new_search
+        if not has_search_results:
+            logger.info("Search action: new_search (no context)")
+            return 'new_search'
+
+        # 현재 메시지에서 브랜드/카테고리 추출
+        new_brand = self._extract_brand(message)
+        new_category = self._extract_category(message)
+
+        # LLM 결과에서도 추출
+        if llm_result:
+            search_params = llm_result.get('search_params', {})
+            if not new_brand and search_params.get('brand'):
+                new_brand = search_params.get('brand')
+            if not new_category:
+                target_cats = search_params.get('target_categories', [])
+                if target_cats:
+                    new_category = target_cats[0]
+
+        # 이전 검색 조건
+        last_params = context.get('last_search_params') or {}
+        last_brand = last_params.get('brand')
+        last_categories = last_params.get('target_categories', [])
+        last_category = last_categories[0] if last_categories else None
+
+        # 규칙 2: 이미지 세션 → refine 우선
+        if last_search_type == 'image' and has_analysis_id:
+            logger.info("Search action: refine (image session)")
+            return 'refine'
+
+        # 규칙 3 & 4: 텍스트 세션
+        if last_search_type == 'text':
+            # 브랜드와 카테고리 모두 새로 지정되고 둘 다 변경된 경우 → new_search
+            brand_changed = new_brand and new_brand != last_brand
+            category_changed = new_category and new_category != last_category
+
+            if brand_changed and category_changed:
+                logger.info(
+                    f"Search action: new_search (brand+category both changed: "
+                    f"{last_brand}→{new_brand}, {last_category}→{new_category})"
+                )
+                return 'new_search'
+
+            # 그 외는 refine (필터 추가, 브랜드만 변경, 카테고리만 변경)
+            logger.info(
+                f"Search action: refine (text session filter/partial change: "
+                f"brand={last_brand}→{new_brand}, category={last_category}→{new_category})"
+            )
+            return 'refine'
+
+        # 기본값: 컨텍스트가 있으면 refine
+        logger.info("Search action: refine (default with context)")
+        return 'refine'
 
     def _keyword_based_classification(
         self,
@@ -580,6 +725,84 @@ class MainOrchestrator:
 
     # ============ Session Management (Redis) ============
 
+    def _load_products_from_analysis(self, analysis_id: int) -> list:
+        """
+        분석 결과에서 상품 목록 로드 (피드에서 접근 시 사용)
+
+        피드 UI와 동일한 순서를 유지하기 위해 DetectedObject당 가장 높은 신뢰도의
+        상품 하나만 로드합니다. (FeedDetectedObjectSerializer의 matched_product와 일치)
+
+        Args:
+            analysis_id: 분석 ID
+
+        Returns:
+            상품 목록 (last_search_results 형식)
+        """
+        try:
+            from analyses.models import ImageAnalysis, DetectedObject
+
+            analysis = ImageAnalysis.objects.select_related('uploaded_image').get(
+                id=analysis_id,
+                is_deleted=False
+            )
+
+            detected_objects = DetectedObject.objects.filter(
+                uploaded_image=analysis.uploaded_image,
+                is_deleted=False
+            ).prefetch_related(
+                'product_mappings',
+                'product_mappings__product',
+                'product_mappings__product__size_codes'
+            )
+
+            products = []
+            for idx, obj in enumerate(detected_objects):
+                # 피드와 동일하게 가장 높은 신뢰도의 매핑만 선택
+                mappings = list(obj.product_mappings.filter(is_deleted=False))
+                if not mappings:
+                    continue
+
+                # 최고 신뢰도 매핑 선택
+                best_mapping = max(mappings, key=lambda m: m.confidence_score)
+                product = best_mapping.product
+
+                if product:
+                    # 사이즈 정보 추출
+                    sizes = [
+                        {"code": sc.size_value, "is_available": True}
+                        for sc in product.size_codes.filter(is_deleted=False)
+                    ]
+
+                    products.append({
+                        'index': len(products) + 1,
+                        'product_id': product.id,
+                        'brand_name': product.brand_name,
+                        'product_name': product.product_name,
+                        'selling_price': product.selling_price,
+                        'product_image_url': product.product_image_url,
+                        'product_url': product.product_url,
+                        'sizes': sizes,
+                        'detected_object_id': obj.id,
+                        'category': obj.object_category,
+                        'bbox': {
+                            'x1': obj.bbox_x1,
+                            'y1': obj.bbox_y1,
+                            'x2': obj.bbox_x2,
+                            'y2': obj.bbox_y2,
+                        },
+                        'confidence_score': best_mapping.confidence_score,
+                    })
+
+            logger.info(f"Loaded {len(products)} products from analysis {analysis_id} (best match per object)")
+            return products
+
+        except ImageAnalysis.DoesNotExist:
+            logger.warning(f"Analysis {analysis_id} not found")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to load products from analysis {analysis_id}: {e}")
+            return []
+
     def _load_context(self) -> Dict[str, Any]:
         """Redis에서 세션 컨텍스트 로드"""
         try:
@@ -694,6 +917,11 @@ class MainOrchestrator:
                 category_filter = context.get('analysis_category_filter')
                 item_type_filter = context.get('analysis_item_type_filter')
                 is_fitting_flow = context.get('fitting_flow', False)
+
+                logger.info(
+                    f"check_analysis_status: analysis_id={analysis_id}, "
+                    f"category_filter={category_filter}, item_type_filter={item_type_filter}"
+                )
 
                 # 결과 가져오기 (카테고리/아이템타입 필터 적용)
                 products = self.search_agent.get_analysis_results(

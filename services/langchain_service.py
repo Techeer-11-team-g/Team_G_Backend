@@ -708,11 +708,13 @@ Respond in JSON format:
 - skirt: 치마, 스커트
 
 ## 아이템 타입 추출 (세부 분류)
-카테고리 내 세부 아이템 타입도 추출하세요:
-- outer 세부: coat(코트), padding(패딩), jacket(자켓/재킷), cardigan(가디건), jumper(점퍼/바람막이)
-- shoes 세부: sneakers(운동화/스니커즈), loafers(구두/로퍼), boots(부츠), sandals(샌들), slippers(슬리퍼)
-- top 세부: tshirt(티셔츠), shirt(셔츠), knit(니트), hoodie(후드/후드티), sweatshirt(맨투맨)
-- bottom 세부: jeans(청바지), slacks(슬랙스), jogger(조거팬츠), shorts(반바지)
+카테고리 내 세부 아이템 타입은 **구체적인 아이템명이 있을 때만** 추출하세요.
+"신발", "상의", "아우터" 같은 **일반적인 카테고리명은 item_type을 추출하지 마세요**.
+- outer 세부: coat(코트/트렌치), padding(패딩/다운), jacket(자켓/재킷/블레이저), cardigan(가디건), jumper(점퍼/바람막이)
+- shoes 세부: sneakers(운동화/스니커즈), loafers(구두/로퍼/옥스퍼드), boots(부츠/워커), sandals(샌들), slippers(슬리퍼)
+  ⚠️ "신발"은 일반 카테고리이므로 item_type 없이 target_categories=['shoes']만 설정
+- top 세부: tshirt(티셔츠), shirt(셔츠), knit(니트/스웨터), hoodie(후드/후드티), sweatshirt(맨투맨)
+- bottom 세부: jeans(청바지/데님), slacks(슬랙스), jogger(조거팬츠), shorts(반바지)
 
 ## 브랜드 추출
 메시지에서 브랜드명이 있으면 추출하세요 (영문 소문자로):
@@ -724,7 +726,46 @@ Respond in JSON format:
 - 무신사 스탠다드/musinsa standard → musinsastandard
 - 커버낫/covernat → covernat
 - 디스이즈네버댓/thisisneverthat → thisisneverthat
-- 기타 브랜드도 영문 소문자로 변환"""
+- 기타 브랜드도 영문 소문자로 변환
+
+## 패턴/문양 추출
+메시지에서 패턴/문양 키워드가 있으면 추출하세요:
+- 스트라이프/줄무늬/세로줄/가로줄 → stripe
+- 점박이/도트/폴카도트/땡땡이 → polka_dot
+- 체크/격자/체크무늬/깅엄 → check
+- 무지/솔리드/단색/민무늬 → solid
+- 꽃무늬/플로럴/꽃 → floral
+- 페이즐리 → paisley
+- 카모/밀리터리/위장/아미 → camo
+- 호피/레오파드/표범/지브라/얼룩말/애니멀 → animal
+- 로고/프린트/그래픽/레터링 → graphic
+- 아가일/마름모 → argyle
+
+## 스타일 추출
+메시지에서 스타일 키워드가 있으면 추출하세요:
+- 캐주얼/편한/일상 → casual
+- 포멀/정장/격식/오피스 → formal
+- 스포티/운동/액티브/애슬레저 → sporty
+- 빈티지/레트로/복고/구제 → vintage
+- 미니멀/심플/기본/베이직 → minimal
+- 스트릿/힙합/유니크 → street
+- 클래식/정통/트래디셔널 → classic
+- 오버핏/루즈핏/박시/와이드 → overfit
+- 슬림핏/타이트/스키니/피트 → slim
+
+## 소재 추출
+메시지에서 소재 키워드가 있으면 추출하세요:
+- 데님/청 → denim
+- 가죽/레더/소가죽/양가죽 → leather
+- 니트/울/양모/캐시미어 → wool
+- 면/코튼/순면 → cotton
+- 린넨/마/마직 → linen
+- 벨벳/벨루어 → velvet
+- 코듀로이/골덴 → corduroy
+- 퍼/털/무스탕/양털 → fur
+- 스웨이드 → suede
+- 나일론/폴리/폴리에스터 → polyester
+- 실크/비단/새틴 → silk"""
 
             user_content = f"""사용자 메시지: "{message}"
 
@@ -773,7 +814,7 @@ Respond in JSON format:
                                      "sneakers", "loafers", "boots", "sandals", "slippers",
                                      "tshirt", "shirt", "knit", "hoodie", "sweatshirt",
                                      "jeans", "slacks", "jogger", "shorts"],
-                            "description": "세부 아이템 타입 (코트→coat, 패딩→padding, 운동화→sneakers, 구두→loafers 등)"
+                            "description": "세부 아이템 타입 - 구체적 아이템명만 (운동화→sneakers, 코트→coat). '신발', '상의' 같은 일반 카테고리명은 item_type 없이 target_categories만 설정"
                         },
                         "reference_type": {
                             "type": "string",
@@ -801,6 +842,21 @@ Respond in JSON format:
                         "brand": {
                             "type": "string",
                             "description": "브랜드명 (나이키, 아디다스, 자라, 유니클로 등)"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "enum": ["stripe", "polka_dot", "check", "solid", "floral", "paisley", "camo", "animal", "graphic", "argyle"],
+                            "description": "패턴/문양 (스트라이프→stripe, 점박이→polka_dot, 체크→check, 무지→solid, 꽃무늬→floral, 호피→animal 등)"
+                        },
+                        "style": {
+                            "type": "string",
+                            "enum": ["casual", "formal", "sporty", "vintage", "minimal", "street", "classic", "overfit", "slim"],
+                            "description": "스타일 (캐주얼→casual, 포멀→formal, 스포티→sporty, 빈티지→vintage, 미니멀→minimal, 오버핏→overfit, 슬림핏→slim 등)"
+                        },
+                        "material": {
+                            "type": "string",
+                            "enum": ["denim", "leather", "wool", "cotton", "linen", "velvet", "corduroy", "fur", "suede", "polyester", "silk"],
+                            "description": "소재 (데님→denim, 가죽→leather, 니트/울→wool, 면→cotton, 린넨→linen, 벨벳→velvet, 코듀로이→corduroy 등)"
                         },
                         "confidence": {
                             "type": "number",
@@ -835,6 +891,9 @@ Respond in JSON format:
                         "color": result.get("color"),
                         "brand": result.get("brand"),
                         "item_type": result.get("item_type"),  # 세부 아이템 타입
+                        "pattern": result.get("pattern"),      # 패턴/문양
+                        "style": result.get("style"),          # 스타일
+                        "material": result.get("material"),    # 소재
                     },
                     "commerce_params": {
                         "size": result.get("size"),

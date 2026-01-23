@@ -34,9 +34,11 @@ class RedisService:
     # - 폴링용 상태: 분석 완료 후 결과 확인까지 충분한 시간 (30분)
     # - 대화 히스토리: 세션 유지용 (2시간)
     # - 재분석 상태: 재분석 완료 후 확인까지 (30분)
+    # - 분석 데이터 캐시: 결과 재사용을 위한 장기 캐시 (24시간)
     TTL_POLLING = 30 * 60           # 30분 - 분석/피팅 상태 폴링용
     TTL_CONVERSATION = 2 * 60 * 60  # 2시간 - 대화 히스토리 (연속 재분석 세션)
     TTL_REFINE = 30 * 60            # 30분 - 재분석 상태 폴링용
+    TTL_DATA_CACHE = 24 * 60 * 60   # 24시간 - 분석 결과 데이터 캐시
 
     # 하위 호환성을 위한 기본값 (신규 코드는 용도별 TTL 사용 권장)
     DEFAULT_TTL = TTL_POLLING
@@ -170,7 +172,7 @@ class RedisService:
             Success status
         """
         key = self._get_data_key(analysis_id)
-        ttl = ttl or self.TTL_POLLING
+        ttl = ttl or self.TTL_DATA_CACHE  # 24시간 캐시
 
         try:
             self.client.setex(key, ttl, json.dumps(data))

@@ -6,6 +6,7 @@ from .views import (
     ImageAnalysisStatusView,
     ImageAnalysisResultView,
     FeedView,
+    FeedStylesView,
     MyHistoryView,
     TogglePublicView,
 )
@@ -29,5 +30,6 @@ urlpatterns = [
 
     # 피드 & 히스토리
     path('api/v1/feed', FeedView.as_view(), name='feed'),
+    path('api/v1/feed/styles', FeedStylesView.as_view(), name='feed-styles'),
     path('api/v1/my-history', MyHistoryView.as_view(), name='my-history'),
 ]
