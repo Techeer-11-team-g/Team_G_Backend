@@ -37,6 +37,7 @@ from .tasks import (
     parse_refine_query_task,
     refine_single_object,
     upload_image_to_gcs_task,
+    extract_style_tags_task,
 )
 from .constants import CATEGORY_ALIASES
 from .utils import create_span, expand_category_aliases
@@ -89,7 +90,7 @@ class UploadedImageView(APIView):
 
         return None
 
-    def _process_auto_analyze(self, image_b64, file, user_id, headers):
+    def _process_auto_analyze(self, image_b64, file, user_id):
         """
         auto_analyze=True 처리: GCS 업로드와 분석을 병렬로 시작.
 
@@ -117,16 +118,25 @@ class UploadedImageView(APIView):
             image_analysis_status=ImageAnalysis.Status.PENDING,
         )
 
+        # 트레이스 컨텍스트 전파를 위한 헤더 생성
+        from opentelemetry.propagate import inject
+        trace_headers = {}
+        inject(trace_headers)
+
+        # 세 태스크를 병렬 실행 (멀티스레드 워커가 동시 처리)
         upload_image_to_gcs_task.apply_async(
             args=[image_b64, file.name, file.content_type, user_id],
             kwargs={'uploaded_image_id': uploaded_image_id},
-            headers=headers,
+            headers=trace_headers,
         )
-
         process_image_analysis.apply_async(
             args=[str(analysis.id), None],
             kwargs={'user_id': user_id, 'image_b64': image_b64},
-            headers=headers,
+            headers=trace_headers,
+        )
+        extract_style_tags_task.apply_async(
+            args=[uploaded_image_id, image_b64],
+            headers=trace_headers,
         )
 
         logger.info(
@@ -155,7 +165,7 @@ class UploadedImageView(APIView):
             }
         }, status=status.HTTP_201_CREATED)
 
-    def _process_upload_only(self, image_b64, file, user_id, headers):
+    def _process_upload_only(self, image_b64, file, user_id):
         """
         auto_analyze=False 처리: GCS 업로드만.
 
@@ -164,7 +174,6 @@ class UploadedImageView(APIView):
         """
         result = upload_image_to_gcs_task.apply_async(
             args=[image_b64, file.name, file.content_type, user_id],
-            headers=headers,
         ).get(timeout=60)
 
         logger.info(
@@ -237,18 +246,15 @@ class UploadedImageView(APIView):
             user_id = request.user.id if request.user.is_authenticated else None
 
             # 4. Celery 태스크 실행
+            # CeleryInstrumentor가 자동으로 trace context 전파 (propagate_headers=True)
             try:
-                from opentelemetry.propagate import inject
-                headers = {}
-                inject(headers)
-
                 if auto_analyze:
-                    response = self._process_auto_analyze(image_b64, file, user_id, headers)
+                    response = self._process_auto_analyze(image_b64, file, user_id)
                     ctx.set("parallel_mode", True)
                     ctx.set("status", "success")
                     return response
                 else:
-                    response = self._process_upload_only(image_b64, file, user_id, headers)
+                    response = self._process_upload_only(image_b64, file, user_id)
                     ctx.set("status", "success")
                     return response
 
@@ -462,14 +468,10 @@ class ImageAnalysisView(APIView):
         - 대화 히스토리 문맥 유지
         """
         try:
-            from opentelemetry.propagate import inject
-            headers = {}
-            inject(headers)
-
+            # CeleryInstrumentor가 자동으로 trace context 전파
             parsed_query = parse_refine_query_task.apply_async(
                 args=[query, available_categories],
                 kwargs={'analysis_id': analysis_id},  # 대화 문맥용
-                headers=headers,
             ).get(timeout=30)
 
             # v2 다중 요청 처리
@@ -545,16 +547,16 @@ class ImageAnalysisView(APIView):
             if not image_url and uploaded_image.uploaded_image_url:
                 image_url = uploaded_image.uploaded_image_url
 
-            # Celery task 트리거
-            try:
-                from opentelemetry.propagate import inject
-                headers = {}
-                inject(headers)
+            # Celery task 트리거 (트레이스 컨텍스트 수동 전파)
+            from opentelemetry.propagate import inject
+            trace_headers = {}
+            inject(trace_headers)
 
+            try:
                 process_image_analysis.apply_async(
                     args=[str(analysis.id), image_url],
                     kwargs={'user_id': request.user.id if request.user.is_authenticated else None},
-                    headers=headers,
+                    headers=trace_headers,
                 )
                 logger.info(
                     "이미지 분석 시작",

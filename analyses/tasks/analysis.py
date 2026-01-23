@@ -182,6 +182,11 @@ def process_image_analysis(
 
             # Step 4: Create subtasks for parallel processing
             with create_span(TRACER_NAME, "4_dispatch_parallel_tasks") as span:
+                # Chord 태스크에 trace context 수동 전파
+                from opentelemetry.propagate import inject
+                trace_headers = {}
+                inject(trace_headers)
+
                 subtasks = []
                 for idx, item in enumerate(detected_items):
                     subtasks.append(
@@ -199,14 +204,14 @@ def process_image_analysis(
                                 'confidence': item.confidence,
                             },
                             item_index=idx,
-                        )
+                        ).set(headers=trace_headers)  # trace context 전파
                     )
 
                 callback = analysis_complete_callback.s(
                     analysis_id=analysis_id,
                     user_id=user_id,
                     total_items=len(detected_items),
-                )
+                ).set(headers=trace_headers)  # callback에도 trace context 전파
 
                 chord(subtasks)(callback)
                 span.set("tasks.count", len(subtasks))
@@ -331,11 +336,7 @@ def analysis_complete_callback(
 
             push_metrics()
 
-            # 스타일 태그 추출 태스크 비동기 호출 (실패해도 분석에 영향 없음)
-            try:
-                extract_style_tags_task.delay(analysis_id)
-            except Exception as e:
-                logger.warning(f"Failed to trigger style tag extraction: {e}")
+            # 스타일 태그 추출은 분석 시작 시 병렬로 실행됨 (views.py에서 호출)
 
             return {
                 'analysis_id': analysis_id,
@@ -696,30 +697,29 @@ def _normalize_result_bbox(bbox: dict) -> dict:
 # =============================================================================
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
-def extract_style_tags_task(self, analysis_id: str):
+def extract_style_tags_task(self, uploaded_image_id: int, image_b64: str):
     """
     코디 이미지에서 스타일 태그 추출.
 
-    분석 완료 후 비동기로 호출되어 UploadedImage에 스타일 태그를 저장합니다.
-    실패해도 분석 결과에는 영향 없음.
+    분석 시작과 동시에 병렬로 호출되어 UploadedImage에 스타일 태그를 저장합니다.
+    분석 파이프라인과 독립적으로 실행됩니다.
+
+    Args:
+        uploaded_image_id: UploadedImage ID
+        image_b64: Base64 인코딩된 이미지
     """
-    from analyses.models import ImageAnalysis
+    from analyses.models import UploadedImage
     from services.gpt4v_service import get_gpt4v_service
 
     with create_span(TRACER_NAME, "extract_style_tags") as ctx:
-        ctx.set("analysis.id", analysis_id)
+        ctx.set("uploaded_image.id", uploaded_image_id)
 
         try:
-            # 분석 및 원본 이미지 조회
-            analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
-            uploaded_image = analysis.uploaded_image
+            # UploadedImage 조회
+            uploaded_image = UploadedImage.objects.get(id=uploaded_image_id)
 
-            if not uploaded_image or not uploaded_image.uploaded_image_url:
-                logger.warning(f"No image URL for analysis {analysis_id}")
-                return {'status': 'skipped', 'reason': 'no_image_url'}
-
-            # 이미지 다운로드
-            image_bytes = _download_image(uploaded_image.uploaded_image_url)
+            # 이미지 바이트 디코딩
+            image_bytes = base64.b64decode(image_b64)
 
             # Claude Vision으로 스타일 태그 추출
             gpt4v_service = get_gpt4v_service()
@@ -731,10 +731,10 @@ def extract_style_tags_task(self, analysis_id: str):
             uploaded_image.save(update_fields=['style_tag1', 'style_tag2', 'updated_at'])
 
             logger.info(
-                f"Style tags extracted for analysis {analysis_id}",
+                f"Style tags extracted for uploaded_image {uploaded_image_id}",
                 extra={
                     'event': 'style_tags_saved',
-                    'analysis_id': analysis_id,
+                    'uploaded_image_id': uploaded_image_id,
                     'style_tag1': style_tag1,
                     'style_tag2': style_tag2,
                 }
@@ -745,15 +745,16 @@ def extract_style_tags_task(self, analysis_id: str):
 
             return {
                 'status': 'success',
+                'uploaded_image_id': uploaded_image_id,
                 'style_tag1': style_tag1,
                 'style_tag2': style_tag2,
             }
 
-        except ImageAnalysis.DoesNotExist:
-            logger.error(f"ImageAnalysis {analysis_id} not found for style tag extraction")
-            return {'status': 'error', 'reason': 'analysis_not_found'}
+        except UploadedImage.DoesNotExist:
+            logger.error(f"UploadedImage {uploaded_image_id} not found for style tag extraction")
+            return {'status': 'error', 'reason': 'uploaded_image_not_found'}
 
         except Exception as e:
-            logger.error(f"Style tag extraction failed for {analysis_id}: {e}")
+            logger.error(f"Style tag extraction failed for uploaded_image {uploaded_image_id}: {e}")
             ctx.set("error", str(e))
             raise self.retry(exc=e)
