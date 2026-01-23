@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main         
+
+jobs:
+  detect-pr:
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find PR
+        id: pr
+        run: |
+          PR_NUMBER=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --state closed \
+            --json number,mergeCommit \
+            --jq ".[] | select(.mergeCommit.oid == \"${{ github.sha }}\") | .number")
+
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: detect-pr
+    if: needs.detect-pr.outputs.pr_number != ''     
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set PR Number
+        run: |
+          PR_NUMBER=${{ needs.detect-pr.outputs.pr_number }}
+          echo "PR_NUMBER=${PR_NUMBER}"
+          echo "PR_NUMBER"="${PR_NUMBER}" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Set Docker Image Tag
+        id: get_pr_number
+        run: |
+          PR_NUMBER=${{ needs.detect-pr.outputs.pr_number }}
+          DOCKER_IMAGE_TAG="1.0.$PR_NUMBER"          
+          echo "DOCKER_IMAGE_TAG=${DOCKER_IMAGE_TAG}"
+          echo "DOCKER_IMAGE_TAG"="${DOCKER_IMAGE_TAG}" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker --quiet
+
+      - name: Build Docker Image
+        env:
+          DOCKER_IMAGE_TAG: ${{ steps.get_pr_number.outputs.DOCKER_IMAGE_TAG }}
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          docker build -t gcr.io/$PROJECT_ID/team-g-backend:${{ env.DOCKER_IMAGE_TAG }} .
+
+      - name: Push Docker Image
+        env:
+          DOCKER_IMAGE_TAG: ${{ steps.get_pr_number.outputs.DOCKER_IMAGE_TAG }}
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          docker push gcr.io/$PROJECT_ID/team-g-backend:${{ env.DOCKER_IMAGE_TAG }}
