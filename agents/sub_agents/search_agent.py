@@ -111,6 +111,14 @@ class SearchAgent:
         )
         try:
             if sub_intent == 'new_search':
+                # reset_context 플래그가 있으면 이전 검색 조건 초기화
+                intent_result = context.get('intent_result', {})
+                if intent_result.get('reset_context'):
+                    logger.info("Resetting search context due to user rejection")
+                    context['last_search_params'] = None
+                    context['last_search_query'] = None
+                    context['search_offset'] = 0
+
                 if image:
                     return self.image_search(image, message, context)
                 else:
