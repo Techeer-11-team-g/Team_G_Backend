@@ -179,11 +179,11 @@ class FittingRequestView(APIView):
             # Step 2: 신규 피팅 생성
             fitting = serializer.save(fitting_image_status=FittingImage.Status.PENDING)
 
-            # Step 3: Celery 비동기 태스크 실행
+            # Step 3: Celery 비동기 태스크 실행 (트레이스 컨텍스트 수동 전파)
             from opentelemetry.propagate import inject
-            headers = {}
-            inject(headers)  # 트레이스 컨텍스트 전파
-            process_fitting_task.apply_async(args=[fitting.id], headers=headers)
+            trace_headers = {}
+            inject(trace_headers)
+            process_fitting_task.apply_async(args=[fitting.id], headers=trace_headers)
 
             logger.info(
                 "가상 피팅 요청 생성",

@@ -176,6 +176,13 @@ class CartItemListCreateView(APIView):
                 'total_price': sum(item.quantity * item.selected_product.product.selling_price for item in cart_items)
             })
 
+    @extend_schema(
+        tags=["Orders"],
+        summary="장바구니 상품 추가",
+        description="장바구니에 상품을 추가합니다. 동일한 상품이 이미 있으면 수량이 증가합니다.",
+        request=CartItemCreateSerializer,
+        responses={201: CartItemSerializer}
+    )
     def post(self, request):
         with _create_span("add_to_cart") as span:
             span.set("user.id", request.user.id)

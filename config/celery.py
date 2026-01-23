@@ -4,7 +4,7 @@ Celery configuration for config project.
 
 import os
 from celery import Celery
-from celery.signals import worker_process_init, celeryd_init
+from celery.signals import worker_process_init, celeryd_init, setup_logging
 from kombu import Queue
 
 # Set the default Django settings module
@@ -34,6 +34,14 @@ app.conf.task_routes = {
 
 # Auto-discover tasks in all installed apps
 app.autodiscover_tasks()
+
+
+@setup_logging.connect
+def setup_celery_logging(**kwargs):
+    """Use Django's logging configuration for Celery."""
+    from django.conf import settings
+    import logging.config
+    logging.config.dictConfig(settings.LOGGING)
 
 
 @worker_process_init.connect

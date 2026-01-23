@@ -53,6 +53,10 @@ def init_tracing(service_name: str = "team-g-backend"):
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
         from opentelemetry.instrumentation.grpc import GrpcInstrumentorClient
+        from opentelemetry.propagate import set_global_textmap
+        from opentelemetry.propagators.composite import CompositePropagator
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+        from opentelemetry.baggage.propagation import W3CBaggagePropagator
 
         # Create resource with service name
         resource = Resource.create({
@@ -77,11 +81,20 @@ def init_tracing(service_name: str = "team-g-backend"):
 
         trace.set_tracer_provider(provider)
 
+        # Set up W3C TraceContext propagator for trace context propagation
+        # This is required for inject() to work properly
+        propagator = CompositePropagator([
+            TraceContextTextMapPropagator(),
+            W3CBaggagePropagator(),
+        ])
+        set_global_textmap(propagator)
+
         # Auto-instrumentation for Django
         DjangoInstrumentor().instrument()
 
-        # Auto-instrumentation for Celery
-        CeleryInstrumentor().instrument()
+        # Auto-instrumentation for Celery with explicit propagation
+        # propagate_headers=True ensures trace context is passed to child tasks
+        CeleryInstrumentor().instrument(propagate_headers=True)
 
         # Auto-instrumentation for requests library (external API calls)
         RequestsInstrumentor().instrument()
