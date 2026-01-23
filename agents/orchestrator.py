@@ -330,6 +330,11 @@ class MainOrchestrator:
         has_analysis_id = context.get('current_analysis_id') is not None
         has_search_results = context.get('has_search_results', False)
 
+        # 규칙 0: reset_context 플래그 → 무조건 new_search
+        if llm_result and llm_result.get('reset_context'):
+            logger.info("Search action: new_search (user rejection - reset_context)")
+            return 'new_search'
+
         # 규칙 1: 새 이미지 → 무조건 new_search
         if has_image:
             logger.info("Search action: new_search (new image)")
@@ -367,21 +372,28 @@ class MainOrchestrator:
 
         # 규칙 3 & 4: 텍스트 세션
         if last_search_type == 'text':
-            # 브랜드와 카테고리 모두 새로 지정되고 둘 다 변경된 경우 → new_search
             brand_changed = new_brand and new_brand != last_brand
             category_changed = new_category and new_category != last_category
 
-            if brand_changed and category_changed:
+            # 카테고리가 변경되면 → new_search (이전 브랜드 버림)
+            if category_changed:
                 logger.info(
-                    f"Search action: new_search (brand+category both changed: "
-                    f"{last_brand}→{new_brand}, {last_category}→{new_category})"
+                    f"Search action: new_search (category changed: "
+                    f"{last_category}→{new_category})"
                 )
                 return 'new_search'
 
-            # 그 외는 refine (필터 추가, 브랜드만 변경, 카테고리만 변경)
+            # 브랜드만 변경되면 → new_search
+            if brand_changed:
+                logger.info(
+                    f"Search action: new_search (brand changed: "
+                    f"{last_brand}→{new_brand})"
+                )
+                return 'new_search'
+
+            # 색상, 스타일 등 필터만 변경 → refine
             logger.info(
-                f"Search action: refine (text session filter/partial change: "
-                f"brand={last_brand}→{new_brand}, category={last_category}→{new_category})"
+                f"Search action: refine (filter only change)"
             )
             return 'refine'
 
@@ -540,6 +552,19 @@ class MainOrchestrator:
 
         # 5. Refine 확인 (이전 검색 결과가 있는 경우)
         if context.get('has_search_results'):
+            # 5-0. 거부/불만족 표현 → 이전 컨텍스트 초기화하고 새 검색
+            reject_keywords = ["아니", "이거 말고", "말고 ", "맘에 안", "마음에 안", "별로", "싫어", "그거 말고", "다른 거", "새로"]
+            if any(kw in message_lower for kw in reject_keywords):
+                return {
+                    "intent": "search",
+                    "sub_intent": "new_search",
+                    "search_params": {
+                        "target_categories": [extracted_category] if extracted_category else []
+                    },
+                    "references": {"type": "none"},
+                    "reset_context": True  # 컨텍스트 초기화 플래그
+                }
+
             # 5-1. 이미지 분석 결과에서 필터 변경 ("신발만", "코트만 보여줘" 등)
             last_search_type = context.get('last_search_type')
             if last_search_type == 'image':
@@ -555,8 +580,8 @@ class MainOrchestrator:
                         "references": {"type": "none"}
                     }
 
-            # 5-2. 기존 refine 키워드 (텍스트 검색용)
-            refine_keywords = ["다른", "대신", "말고", "색", "브랜드", "싸", "비싸", "없어", "더"]
+            # 5-2. 기존 refine 키워드 (텍스트 검색용) - "말고"는 거부 표현으로 이동
+            refine_keywords = ["다른 색", "대신", "색깔", "브랜드", "싸", "비싸", "없어", "더 "]
             if any(kw in message_lower for kw in refine_keywords):
                 return {
                     "intent": "search",
