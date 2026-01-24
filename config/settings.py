@@ -150,7 +150,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = os.getenv('REDIS_PORT', '6379')
-REDIS_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', '')
+REDIS_URL = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0' if REDIS_PASSWORD else f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
 
 # Cache
 CACHES = {
