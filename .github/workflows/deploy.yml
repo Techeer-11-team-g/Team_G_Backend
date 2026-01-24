@@ -65,17 +65,7 @@ jobs:
           gcloud compute ssh app-server \
             --zone=$GCE_ZONE \
             --tunnel-through-iap \
-            --command="
-              cd ~/Team_G_Backend && \
-              git pull origin main && \
-              cd deploy/app-server && \
-              gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && \
-              docker compose pull && \
-              docker compose up -d && \
-              docker compose exec -T web python manage.py migrate --noinput && \
-              docker compose exec -T web python manage.py collectstatic --noinput && \
-              echo '✅ App Server deployed successfully'
-            "
+            --command='cd /home/jwon000310/Team_G_Backend && git pull origin main && cd deploy/app-server && gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && docker compose pull && docker compose up -d && docker compose exec -T web python manage.py migrate --noinput && docker compose exec -T web python manage.py collectstatic --noinput && echo done'
 
   # ==========================================================================
   # Deploy to Queue Server (Celery)
@@ -99,15 +89,7 @@ jobs:
           gcloud compute ssh queue-server \
             --zone=$GCE_ZONE \
             --tunnel-through-iap \
-            --command="
-              cd ~/Team_G_Backend && \
-              git pull origin main && \
-              cd deploy/queue-server && \
-              gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && \
-              docker compose pull && \
-              docker compose up -d && \
-              echo '✅ Queue Server deployed successfully'
-            "
+            --command='cd /home/jwon000310/Team_G_Backend && git pull origin main && cd deploy/queue-server && gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && docker compose pull && docker compose up -d && echo done'
 
   # ==========================================================================
   # Deploy to Monitoring Server
@@ -131,14 +113,7 @@ jobs:
           gcloud compute ssh monitoring-server \
             --zone=$GCE_ZONE \
             --tunnel-through-iap \
-            --command="
-              cd ~/Team_G_Backend && \
-              git pull origin main && \
-              cd deploy/monitoring-server && \
-              docker compose pull && \
-              docker compose up -d && \
-              echo '✅ Monitoring Server deployed successfully'
-            "
+            --command='cd /home/jwon000310/Team_G_Backend && git pull origin main && cd deploy/monitoring-server && docker compose pull && docker compose up -d && echo done'
 
   # ==========================================================================
   # Health Check
