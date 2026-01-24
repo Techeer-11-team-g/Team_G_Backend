@@ -23,6 +23,8 @@ from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.db.models import Q
 from PIL import Image, ImageOps
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
+from drf_spectacular.types import OpenApiTypes
 
 from products.models import Product
 from .models import FittingImage, UserImage
@@ -174,6 +176,7 @@ class UserImageUploadSerializer(serializers.ModelSerializer):
         model = UserImage
         fields = ['user_image_id', 'user_image_url', 'created_at', 'file']
 
+    @extend_schema_field(OpenApiTypes.URI)
     def get_user_image_url(self, obj) -> str:
         """저장된 이미지의 URL을 반환합니다."""
         if obj.user_image_url:
@@ -275,6 +278,10 @@ class FittingImageSerializer(serializers.ModelSerializer):
             'product_id', 'user_image_url'
         ]
 
+    @extend_schema_field({'type': 'object', 'properties': {
+        'status_url': {'type': 'string'},
+        'result_url': {'type': 'string'},
+    }})
     def get_polling(self, obj) -> dict:
         """클라이언트 폴링용 API URL을 반환합니다."""
         return {
@@ -340,11 +347,12 @@ class FittingImageSerializer(serializers.ModelSerializer):
 class FittingStatusMixin:
     """
     피팅 상태 조회에 필요한 공통 메서드를 제공하는 Mixin
-    
+
     제공 메서드:
         - get_fitting_image_status: 상태값을 대문자로 변환
     """
-    
+
+    @extend_schema_field(OpenApiTypes.STR)
     def get_fitting_image_status(self, obj) -> str:
         """피팅 상태값을 대문자로 반환합니다."""
         return obj.fitting_image_status.upper()
@@ -369,10 +377,11 @@ class FittingStatusSerializer(FittingStatusMixin, serializers.ModelSerializer):
         model = FittingImage
         fields = ['fitting_image_status', 'progress', 'updated_at']
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_progress(self, obj) -> int:
         """
         피팅 상태에 따른 진행률을 반환합니다.
-        
+
         Returns:
             int: 진행률 (RUNNING: 40, DONE: 100, 기타: 0)
         """

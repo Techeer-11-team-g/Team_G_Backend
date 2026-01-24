@@ -477,8 +477,66 @@ CORS_ALLOW_HEADERS = [
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Team_G API',
-    'DESCRIPTION': 'Team_G Shopping Agent Backend API Documentation',
+    'DESCRIPTION': '''
+## Team_G AI 패션 쇼핑 어시스턴트 API
+
+AI 기반 패션 이미지 분석 및 쇼핑 지원 백엔드 API입니다.
+
+### 주요 기능
+- **이미지 분석**: 패션 이미지 업로드 및 AI 분석 (Google Vision + FashionCLIP)
+- **상품 검색**: 벡터 유사도 기반 상품 추천 (OpenSearch k-NN)
+- **가상 피팅**: AI 가상 피팅 서비스 (fashn.ai)
+- **AI 채팅**: 자연어 기반 쇼핑 어시스턴트 (LangChain + Claude)
+- **주문 관리**: 장바구니, 주문, 결제 관리
+
+### 인증
+JWT Bearer Token 인증을 사용합니다.
+1. `/api/v1/auth/register` 또는 `/api/v1/auth/login`으로 토큰 발급
+2. `Authorization: Bearer {access_token}` 헤더에 토큰 포함
+    ''',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
-    # Optional: Grouping or other settings
+
+    # API 태그 정의 및 순서
+    'TAGS': [
+        {'name': 'Users', 'description': '사용자 인증 및 프로필 관리'},
+        {'name': 'Analyses', 'description': '이미지 업로드 및 AI 분석'},
+        {'name': 'Feed', 'description': '공개 피드 및 히스토리'},
+        {'name': 'Fittings', 'description': '가상 피팅 서비스'},
+        {'name': 'Orders', 'description': '장바구니 및 주문 관리'},
+        {'name': 'Chat', 'description': 'AI 패션 어시스턴트 채팅'},
+    ],
+
+    # JWT 인증 스키마
+    'SECURITY': [{'BearerAuth': []}],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'BearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+                'description': 'JWT access token. `/api/v1/auth/login`에서 발급받은 토큰을 입력하세요.',
+            }
+        }
+    },
+
+    # 스키마 설정
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SCHEMA_PATH_PREFIX': r'/api/v1/',
+    'SCHEMA_PATH_PREFIX_TRIM': False,
+
+    # Swagger UI 설정
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayOperationId': False,
+        'filter': True,
+        'docExpansion': 'list',
+        'defaultModelsExpandDepth': 2,
+        'defaultModelExpandDepth': 2,
+    },
+
+    # 기타 설정
+    'SORT_OPERATIONS': False,  # 태그 순서 유지
+    'ENUM_GENERATE_CHOICE_DESCRIPTION': True,
 }

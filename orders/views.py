@@ -66,12 +66,18 @@ class OrderCursorPagination(CursorPagination):
         tags=["Orders"],
         summary="주문 상세 조회",
         description="특정 주문의 상세 정보를 조회합니다.",
+        parameters=[
+            OpenApiParameter("id", type=int, location=OpenApiParameter.PATH, description="주문 ID")
+        ],
         responses={200: OrderDetailSerializer}
     ),
     partial_update=extend_schema(
         tags=["Orders"],
         summary="주문 취소",
         description="배송 시작 전인 주문을 취소합니다.",
+        parameters=[
+            OpenApiParameter("id", type=int, location=OpenApiParameter.PATH, description="주문 ID")
+        ],
         request=OrderCancelSerializer,
         responses={200: OpenApiResponse(description="취소 성공 응답")}
     )
