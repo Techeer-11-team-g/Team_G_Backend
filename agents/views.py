@@ -273,6 +273,7 @@ class ChatSessionView(APIView):
 - 대화 이력 (최근 20턴)
 - 컨텍스트 정보 (검색 결과, 장바구니 등)
         """,
+        operation_id="chat_session_retrieve",
         parameters=[
             OpenApiParameter(
                 name="session_id",
@@ -333,6 +334,7 @@ class ChatSessionView(APIView):
         tags=["Chat"],
         summary="채팅 세션 삭제",
         description="채팅 세션과 관련 대화 이력을 삭제합니다.",
+        operation_id="chat_session_delete",
         parameters=[
             OpenApiParameter(
                 name="session_id",

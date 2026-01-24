@@ -272,6 +272,7 @@ class UploadedImageView(APIView):
         tags=["Analyses"],
         summary="업로드 이미지 이력 조회",
         description="사용자가 업로드한 이미지들의 이력을 조회합니다 (커서 기반 페이지네이션).",
+        operation_id="uploaded_images_list",
         parameters=[
             OpenApiParameter("cursor", type=int, description="이전 페이지의 마지막 ID"),
             OpenApiParameter("limit", type=int, default=10, description="한 페이지당 아이템 수")
@@ -714,6 +715,7 @@ class UploadedImageHistoryView(APIView):
         tags=["Analyses"],
         summary="통합 히스토리 조회",
         description="업로드된 이미지에 대한 검출 객체, 매칭 상품, 피팅 정보를 통합 조회합니다.",
+        operation_id="uploaded_images_retrieve",
         parameters=[
             OpenApiParameter("cursor", type=str, description="페이지네이션용 커서"),
             OpenApiParameter("limit", type=int, default=10, description="페이지당 아이템 수")

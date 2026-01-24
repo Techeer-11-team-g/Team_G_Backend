@@ -8,6 +8,8 @@ analyses 앱 Serializers.
 """
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
+from drf_spectacular.types import OpenApiTypes
 from .models import UploadedImage, ImageAnalysis, DetectedObject, ObjectProductMapping, SelectedProduct
 from .utils import format_bbox_for_api
 from products.models import Product, SizeCode
@@ -20,6 +22,10 @@ from products.models import Product, SizeCode
 class BboxSerializerMixin:
     """Bbox 관련 공통 메서드를 제공하는 Mixin."""
 
+    @extend_schema_field({'type': 'object', 'properties': {
+        'x1': {'type': 'number'}, 'y1': {'type': 'number'},
+        'x2': {'type': 'number'}, 'y2': {'type': 'number'},
+    }})
     def get_bbox(self, obj):
         """DetectedObject의 bbox를 API 응답 형식으로 변환."""
         return format_bbox_for_api(obj)
@@ -28,6 +34,7 @@ class BboxSerializerMixin:
 class ConfidenceScoreMixin:
     """신뢰도 점수 관련 공통 메서드를 제공하는 Mixin."""
 
+    @extend_schema_field(OpenApiTypes.FLOAT)
     def get_confidence_score(self, obj):
         """가장 높은 신뢰도의 매핑 점수 반환."""
         # prefetch된 product_mappings 사용
@@ -101,6 +108,7 @@ class BaseUploadedImageSerializer(serializers.ModelSerializer):
         model = UploadedImage
         fields = ['uploaded_image_id', 'uploaded_image_url', 'created_at']
 
+    @extend_schema_field(OpenApiTypes.URI)
     def get_uploaded_image_url(self, obj):
         """이미지 파일의 절대 경로(URL)를 반환."""
         if obj.uploaded_image_url:
@@ -122,6 +130,7 @@ class UploadedImageListSerializer(BaseUploadedImageSerializer):
     class Meta(BaseUploadedImageSerializer.Meta):
         fields = BaseUploadedImageSerializer.Meta.fields + ['analysis_id']
 
+    @extend_schema_field({'type': 'integer', 'nullable': True})
     def get_analysis_id(self, obj):
         """해당 이미지의 최신 분석 ID 반환."""
         # prefetch된 analyses 사용
@@ -178,6 +187,10 @@ class ImageAnalysisResponseSerializer(serializers.ModelSerializer):
         model = ImageAnalysis
         fields = ['analysis_id', 'status', 'polling']
 
+    @extend_schema_field({'type': 'object', 'properties': {
+        'status_url': {'type': 'string'},
+        'result_url': {'type': 'string'},
+    }})
     def get_polling(self, obj):
         """상태 조회 및 결과 조회를 위한 엔드포인트 생성."""
         return {
@@ -229,11 +242,13 @@ class SizeOptionSerializer(serializers.Serializer):
                 is_deleted=False
             ).first()
 
+    @extend_schema_field(OpenApiTypes.INT)
     def get_inventory(self, obj):
         """해당 사이즈의 재고 조회."""
         selected = self._get_selected_product(obj)
         return selected.selected_product_inventory if selected else 0
 
+    @extend_schema_field({'type': 'integer', 'nullable': True})
     def get_selected_product_id(self, obj):
         """해당 사이즈의 SelectedProduct ID 조회."""
         selected = self._get_selected_product(obj)
@@ -249,6 +264,12 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = ['id', 'brand_name', 'product_name', 'selling_price', 'image_url', 'product_url', 'sizes']
 
+    @extend_schema_field({'type': 'array', 'items': {'type': 'object', 'properties': {
+        'size_code_id': {'type': 'integer'},
+        'size_value': {'type': 'string'},
+        'inventory': {'type': 'integer'},
+        'selected_product_id': {'type': 'integer', 'nullable': True},
+    }}})
     def get_sizes(self, obj):
         """상품의 사이즈 옵션 목록 반환."""
         # prefetch된 size_codes 사용
@@ -300,6 +321,10 @@ class BaseDetectedObjectSerializer(BboxSerializerMixin, ConfidenceScoreMixin, se
             return obj.product_mappings.filter(is_deleted=False).order_by('-confidence_score').first()
         return None
 
+    @extend_schema_field({'type': 'object', 'nullable': True, 'properties': {
+        'product_id': {'type': 'integer'},
+        'product': {'type': 'object'},
+    }})
     def get_match(self, obj):
         """가장 높은 신뢰도의 매칭 상품 반환."""
         mapping = self._get_best_mapping(obj)
@@ -326,6 +351,7 @@ class UploadedImageInfoSerializer(serializers.ModelSerializer):
         model = UploadedImage
         fields = ['id', 'url']
 
+    @extend_schema_field(OpenApiTypes.URI)
     def get_url(self, obj):
         if obj.uploaded_image_url:
             return obj.uploaded_image_url
@@ -346,6 +372,7 @@ class ImageAnalysisResultSerializer(serializers.ModelSerializer):
         model = ImageAnalysis
         fields = ['analysis_id', 'uploaded_image', 'status', 'items']
 
+    @extend_schema_field({'type': 'array', 'items': {'type': 'object'}})
     def get_items(self, obj):
         """분석된 이미지의 검출된 객체 목록 반환."""
         detected_objects = obj.uploaded_image.detected_objects.filter(is_deleted=False)
@@ -387,6 +414,7 @@ class AnalysisRefineImageSerializer(serializers.ModelSerializer):
         model = UploadedImage
         fields = ['uploaded_image_id', 'uploaded_image_url']
 
+    @extend_schema_field(OpenApiTypes.URI)
     def get_uploaded_image_url(self, obj):
         if obj.uploaded_image_url:
             return obj.uploaded_image_url
@@ -461,6 +489,7 @@ class AnalysisRefineResponseSerializer(serializers.ModelSerializer):
         model = ImageAnalysis
         fields = ['analysis_id', 'status', 'image', 'items']
 
+    @extend_schema_field({'type': 'array', 'items': {'type': 'object'}})
     def get_items(self, obj):
         detected_objects = obj.uploaded_image.detected_objects.filter(is_deleted=False)
         return AnalysisRefineItemSerializer(detected_objects, many=True).data
@@ -486,6 +515,14 @@ class HistoryMatchSerializer(serializers.Serializer):
         self.mapping = kwargs.pop('mapping', None)
         super().__init__(*args, **kwargs)
 
+    @extend_schema_field({'type': 'object', 'properties': {
+        'id': {'type': 'integer'},
+        'brand_name': {'type': 'string'},
+        'product_name': {'type': 'string'},
+        'selling_price': {'type': 'integer'},
+        'image_url': {'type': 'string'},
+        'product_url': {'type': 'string'},
+    }})
     def get_product(self, obj):
         product = obj
         return {
@@ -497,6 +534,10 @@ class HistoryMatchSerializer(serializers.Serializer):
             'product_url': product.product_url,
         }
 
+    @extend_schema_field({'type': 'object', 'nullable': True, 'properties': {
+        'fitting_image_id': {'type': 'integer'},
+        'fitting_image_url': {'type': 'string'},
+    }})
     def get_fitting(self, obj):
         """해당 상품에 대한 피팅 이미지 조회."""
         from fittings.models import FittingImage
@@ -581,6 +622,7 @@ class UploadedImageHistoryResponseSerializer(serializers.Serializer):
         self.detected_objects = kwargs.pop('detected_objects', [])
         super().__init__(*args, **kwargs)
 
+    @extend_schema_field({'type': 'array', 'items': {'type': 'object'}})
     def get_items(self, obj):
         return HistoryItemSerializer(self.detected_objects, many=True).data
 
@@ -603,6 +645,10 @@ class FeedDetectedObjectSerializer(serializers.Serializer):
     bbox = serializers.SerializerMethodField()
     matched_product = serializers.SerializerMethodField()
 
+    @extend_schema_field({'type': 'object', 'properties': {
+        'x1': {'type': 'number'}, 'y1': {'type': 'number'},
+        'x2': {'type': 'number'}, 'y2': {'type': 'number'},
+    }})
     def get_bbox(self, obj):
         """bbox 좌표 반환."""
         return {
@@ -612,6 +658,7 @@ class FeedDetectedObjectSerializer(serializers.Serializer):
             'y2': round(obj.bbox_y2, 4),
         }
 
+    @extend_schema_field({'type': 'object', 'nullable': True})
     def get_matched_product(self, obj):
         """매칭된 상품 정보 + 사이즈 목록 반환."""
         from products.models import SizeCode
@@ -674,6 +721,10 @@ class FeedItemSerializer(serializers.ModelSerializer):
             'analysis_id', 'detected_objects', 'analysis_status'
         ]
 
+    @extend_schema_field({'type': 'object', 'nullable': True, 'properties': {
+        'id': {'type': 'integer'},
+        'username': {'type': 'string'},
+    }})
     def get_user(self, obj):
         if obj.user:
             return {
@@ -682,6 +733,7 @@ class FeedItemSerializer(serializers.ModelSerializer):
             }
         return None
 
+    @extend_schema_field({'type': 'integer', 'nullable': True})
     def get_analysis_id(self, obj):
         """분석 ID 반환 (에이전트 연동용)."""
         analysis = getattr(obj, '_prefetched_analysis', None)
@@ -691,6 +743,7 @@ class FeedItemSerializer(serializers.ModelSerializer):
             return analysis.id
         return None
 
+    @extend_schema_field({'type': 'string', 'nullable': True})
     def get_analysis_status(self, obj):
         """분석 상태 반환."""
         analysis = getattr(obj, '_prefetched_analysis', None)
@@ -700,6 +753,7 @@ class FeedItemSerializer(serializers.ModelSerializer):
             return analysis.image_analysis_status
         return None
 
+    @extend_schema_field({'type': 'array', 'items': {'type': 'object'}})
     def get_detected_objects(self, obj):
         """검출된 객체들 반환 (인덱스 포함 - 에이전트에서 "N번 상품" 참조용)."""
         # prefetch된 detected_objects 사용
