@@ -1,66 +1,25 @@
 version: '3.8'
 
 # =============================================================================
-# Monitoring Server (GCE VM 3)
-# - Fluent Bit (로그 수집)
-# - OpenSearch + Dashboards (로깅용)
+# Monitoring Server - 경량화 스택
 # - Prometheus (메트릭 수집)
-# - cAdvisor (컨테이너 모니터링)
+# - Grafana (시각화 대시보드)
+# - Jaeger (분산 트레이싱)
+# - Loki (로그 수집/저장)
+# - Promtail (로그 수집 에이전트)
+# - Node Exporter (VM 메트릭)
 # - Alertmanager (Slack 알림)
-# - Grafana (대시보드)
 # =============================================================================
 
 services:
   # =========================================================================
-  # Logging Stack
-  # =========================================================================
-
-  # OpenSearch for Logging
-  opensearch-logging:
-    image: opensearchproject/opensearch:2.11.1
-    environment:
-      - cluster.name=logging-cluster
-      - node.name=opensearch-logging
-      - discovery.type=single-node
-      - plugins.security.disabled=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-    ports:
-      - "9200:9200"
-    volumes:
-      - opensearch_logging_data:/usr/share/opensearch/data
-    restart: always
-
-  # OpenSearch Dashboards for Log Visualization
-  opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:2.11.1
-    ports:
-      - "5601:5601"
-    environment:
-      OPENSEARCH_HOSTS: '["http://opensearch-logging:9200"]'
-      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
-    depends_on:
-      - opensearch-logging
-    restart: always
-
-  # Fluent Bit - Log Collector
-  fluent-bit:
-    image: fluent/fluent-bit:2.2
-    ports:
-      - "24224:24224"  # Forward input
-    volumes:
-      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
-      - ./parsers.conf:/fluent-bit/etc/parsers.conf
-    depends_on:
-      - opensearch-logging
-    restart: always
-
-  # =========================================================================
   # Metrics Stack
   # =========================================================================
 
-  # Prometheus
+  # Prometheus - 메트릭 수집 및 저장
   prometheus:
     image: prom/prometheus:v2.48.0
+    container_name: prometheus
     ports:
       - "9090:9090"
     volumes:
@@ -70,57 +29,16 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.time=15d'
       - '--web.enable-lifecycle'
     restart: always
+    networks:
+      - monitoring
 
-  # Alertmanager - Slack 알림
-  alertmanager:
-    image: prom/alertmanager:v0.26.0
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
-    command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-    restart: always
-
-  # Grafana
-  grafana:
-    image: grafana/grafana:10.2.2
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
-    environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_INSTALL_PLUGINS=grafana-opensearch-datasource
-    depends_on:
-      - prometheus
-      - jaeger
-    restart: always
-
-  # cAdvisor - Container metrics
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.47.2
-    ports:
-      - "8080:8080"
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-    privileged: true
-    restart: always
-
-  # Node Exporter - Host metrics (CPU, Memory, Disk, Network)
+  # Node Exporter - VM 호스트 메트릭 (CPU, Memory, Disk, Network)
   node-exporter:
     image: prom/node-exporter:v1.7.0
+    container_name: node-exporter
     ports:
       - "9100:9100"
     volumes:
@@ -133,14 +51,64 @@ services:
       - '--path.rootfs=/rootfs'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
     restart: always
+    networks:
+      - monitoring
+
+  # Alertmanager - Slack 알림
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    restart: always
+    networks:
+      - monitoring
+
+  # =========================================================================
+  # Logging Stack (Loki)
+  # =========================================================================
+
+  # Loki - 로그 저장소
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yaml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: always
+    networks:
+      - monitoring
+
+  # Promtail - 로그 수집 에이전트
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: promtail
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: always
+    networks:
+      - monitoring
 
   # =========================================================================
   # Tracing Stack
   # =========================================================================
 
-  # Jaeger - Distributed Tracing
+  # Jaeger - 분산 트레이싱
   jaeger:
     image: jaegertracing/all-in-one:1.52
+    container_name: jaeger
     ports:
       - "16686:16686"  # Jaeger UI
       - "14268:14268"  # HTTP collector
@@ -156,9 +124,42 @@ services:
     volumes:
       - jaeger_data:/badger
     restart: always
+    networks:
+      - monitoring
+
+  # =========================================================================
+  # Visualization
+  # =========================================================================
+
+  # Grafana - 대시보드
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
+    restart: always
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    driver: bridge
 
 volumes:
-  opensearch_logging_data:
   prometheus_data:
-  grafana_data:
+  loki_data:
   jaeger_data:
+  grafana_data:
