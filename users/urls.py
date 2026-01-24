@@ -1,8 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from drf_spectacular.utils import extend_schema, extend_schema_view
-
-from .views import UserOnboardingView, UserMeView, UserRegisterView
+from .views import UserOnboardingView, UserMeView, UserRegisterView, GoogleLoginView
 
 
 # SimpleJWT 뷰에 Swagger 태그 및 설명 추가
@@ -26,8 +24,9 @@ DecoratedTokenRefreshView = extend_schema_view(
 urlpatterns = [
     # 인증 API
     path("auth/register", UserRegisterView.as_view()),
-    path("auth/login", DecoratedTokenObtainPairView.as_view()),
-    path("auth/refresh", DecoratedTokenRefreshView.as_view()),
+    path("auth/login", TokenObtainPairView.as_view()),
+    path("auth/refresh", TokenRefreshView.as_view()),
+    path("auth/google", GoogleLoginView.as_view()),  # 구글 소셜 로그인
 
     # 사용자 API
     path("users/profile", UserMeView.as_view()),

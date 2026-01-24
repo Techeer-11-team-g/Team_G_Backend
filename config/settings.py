@@ -248,6 +248,16 @@ SIMPLE_JWT = {
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
 }
 
+# =============================================================================
+# Google OAuth (Social Login)
+# =============================================================================
+
+GOOGLE_CLIENT_ID = os.getenv(
+    'GOOGLE_CLIENT_ID',
+    '546346434408-s25j9s9e3vfpf4k0fd1ltiragobh28qn.apps.googleusercontent.com'
+)
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+
 
 # =============================================================================
 # Google Cloud Storage
