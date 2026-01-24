@@ -10,9 +10,7 @@ version: "3.8"
 
 services:
   web:
-    build:
-      context: ../../
-      dockerfile: Dockerfile
+    image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
     command: gunicorn config.wsgi:application -c gunicorn.conf.py
     volumes:
       - static_volume:/app/staticfiles
