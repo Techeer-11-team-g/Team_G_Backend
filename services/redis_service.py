@@ -47,6 +47,7 @@ class RedisService:
         self.client = redis.Redis(
             host=getattr(settings, 'REDIS_HOST', 'localhost'),
             port=int(getattr(settings, 'REDIS_PORT', 6379)),
+            password=getattr(settings, 'REDIS_PASSWORD', None),
             db=0,
             decode_responses=True,
         )
