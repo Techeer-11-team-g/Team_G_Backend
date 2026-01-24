@@ -22,6 +22,7 @@ Pipeline:
 
 import base64
 import logging
+import os
 from typing import Optional
 
 from celery import shared_task, chord
