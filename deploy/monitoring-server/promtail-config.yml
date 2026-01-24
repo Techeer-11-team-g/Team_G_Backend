@@ -1,0 +1,73 @@
+# =============================================================================
+# Promtail Configuration
+# 로그 수집 에이전트 설정
+# =============================================================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # =========================================================================
+  # Docker 컨테이너 로그 수집
+  # =========================================================================
+  - job_name: containers
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: containerlogs
+          __path__: /var/lib/docker/containers/*/*log
+
+    pipeline_stages:
+      # Docker JSON 로그 파싱
+      - json:
+          expressions:
+            output: log
+            stream: stream
+            attrs:
+      - json:
+          expressions:
+            tag:
+          source: attrs
+      - regex:
+          expression: (?P<container_name>(?:[a-zA-Z0-9][a-zA-Z0-9_.-]+))
+          source: tag
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+      - labels:
+          stream:
+          container_name:
+      - output:
+          source: output
+
+  # =========================================================================
+  # 시스템 로그 수집
+  # =========================================================================
+  - job_name: system
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: syslog
+          __path__: /var/log/syslog
+
+  - job_name: auth
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: authlog
+          __path__: /var/log/auth.log
+
+  # =========================================================================
+  # 앱 서버에서 로그를 푸시받는 경우 (선택적)
+  # Django/Celery에서 직접 Loki로 로그를 보낼 수 있음
+  # =========================================================================
