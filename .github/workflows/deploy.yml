@@ -110,7 +110,7 @@ jobs:
 
       - name: Deploy to Monitoring Server
         run: |
-          gcloud compute ssh monitoring-server \
+          gcloud compute ssh monitoring \
             --zone=$GCE_ZONE \
             --tunnel-through-iap \
             --command='git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/monitoring-server && sudo docker compose pull && sudo docker compose up -d && echo done'
