@@ -1,5 +1,7 @@
 global:
-  slack_api_url: 'SLACK_WEBHOOK_URL'
+  # VM에서 실제 Slack Webhook URL로 변경하세요
+  # 발급: https://api.slack.com/apps → Incoming Webhooks
+  slack_api_url: 'YOUR_SLACK_WEBHOOK_URL'
 
 route:
   group_by: ['alertname', 'severity']
@@ -18,8 +20,8 @@ route:
 receivers:
   - name: 'slack-notifications'
     slack_configs:
-      - channel: '#monitoring-alerts'
-        username: 'AlertManager'
+      - channel: '#team-g'
+        username: 'Team-G AlertManager'
         icon_emoji: ':warning:'
         send_resolved: true
         title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
@@ -34,8 +36,8 @@ receivers:
 
   - name: 'slack-critical'
     slack_configs:
-      - channel: '#monitoring-critical'
-        username: 'AlertManager'
+      - channel: '#team-g'
+        username: 'Team-G AlertManager'
         icon_emoji: ':rotating_light:'
         send_resolved: true
         title: ':rotating_light: CRITICAL: {{ .CommonLabels.alertname }}'
