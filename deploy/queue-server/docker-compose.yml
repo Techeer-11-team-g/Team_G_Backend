@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 # =============================================================================
 # Queue Server (GCE VM 2)
@@ -50,6 +50,7 @@ services:
     command: celery -A config worker -l info --concurrency=4
     volumes:
       - log_volume:/app/logs
+      - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
     env_file:
       - .env
     environment:
@@ -69,6 +70,7 @@ services:
     volumes:
       - log_volume:/app/logs
       - celerybeat_schedule:/app
+      - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
     env_file:
       - .env
     environment:
