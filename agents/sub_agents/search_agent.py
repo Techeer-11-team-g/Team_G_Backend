@@ -200,7 +200,7 @@ class SearchAgent:
         - "상의 찾아줘" → top만 반환
         """
         from analyses.models import UploadedImage, ImageAnalysis
-        from analyses.tasks.analysis import process_image_analysis
+        from analyses.tasks.analysis import process_image_analysis, extract_style_tags_task
         from django.core.files.base import ContentFile
         import uuid
 
@@ -239,6 +239,12 @@ class SearchAgent:
                 analysis_id=analysis.id,
                 image_url=None,
                 user_id=self.user_id,
+                image_b64=image_b64
+            )
+
+            # 3-1. 스타일 태그 추출 (병렬 실행)
+            extract_style_tags_task.delay(
+                uploaded_image_id=uploaded_image.id,
                 image_b64=image_b64
             )
 
