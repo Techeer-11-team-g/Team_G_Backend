@@ -82,7 +82,12 @@ def save_analysis_results(
             analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
             uploaded_image = analysis.uploaded_image
 
-            # 1단계: DetectedObject bulk_create (ID 반환 활용)
+            # 1단계: DetectedObject bulk_create
+            # MySQL은 bulk_create에서 ID를 반환하지 않으므로 재조회 필요
+            max_id_before = DetectedObject.objects.filter(
+                uploaded_image=uploaded_image
+            ).order_by('-id').values_list('id', flat=True).first() or 0
+
             detected_objects_data = []
             for result in results:
                 normalized_bbox = normalize_result_bbox(result.get('bbox', {}))
@@ -96,8 +101,13 @@ def save_analysis_results(
                     cropped_image_url=result.get('cropped_image_url'),
                 ))
 
-            # bulk_create with update_conflicts to get IDs back (Django 4.1+)
-            created_objects = DetectedObject.objects.bulk_create(detected_objects_data)
+            DetectedObject.objects.bulk_create(detected_objects_data)
+
+            # bulk_create 후 ID 조회 (MySQL 호환)
+            created_objects = list(DetectedObject.objects.filter(
+                uploaded_image=uploaded_image,
+                id__gt=max_id_before
+            ).order_by('id'))
             logger.info(f"Bulk created {len(created_objects)} DetectedObjects")
 
             # 2단계: 모든 product_id 수집 + match 정보 매핑
