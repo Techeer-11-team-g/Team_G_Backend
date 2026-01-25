@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 class RerankerConfig:
     """리랭킹 가중치 설정."""
-    VISUAL_WEIGHT = 0.50      # 시각적 유사도 (코사인)
-    OPENSEARCH_WEIGHT = 0.30  # k-NN 점수
-    ATTRIBUTE_WEIGHT = 0.20   # 브랜드/색상 매칭
+    VISUAL_WEIGHT = 0.70      # 시각적 유사도 (코사인)
+    OPENSEARCH_WEIGHT = 0.15  # k-NN 점수
+    ATTRIBUTE_WEIGHT = 0.15   # 브랜드/색상 매칭
 
 
 class HybridReranker(metaclass=SingletonMeta):

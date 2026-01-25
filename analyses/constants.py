@@ -56,9 +56,9 @@ class SearchConfig:
 
 class RerankerConfig:
     """하이브리드 리랭킹 가중치 설정"""
-    VISUAL_WEIGHT = 0.50      # 시각적 유사도 (코사인)
-    OPENSEARCH_WEIGHT = 0.30  # k-NN 점수
-    ATTRIBUTE_WEIGHT = 0.20   # 브랜드/색상 매칭
+    VISUAL_WEIGHT = 0.70      # 시각적 유사도 (코사인)
+    OPENSEARCH_WEIGHT = 0.15  # k-NN 점수
+    ATTRIBUTE_WEIGHT = 0.15   # 브랜드/색상 매칭
     USE_HYBRID = True         # 하이브리드 리랭킹 사용 여부 (False면 Claude 폴백)
 
 
