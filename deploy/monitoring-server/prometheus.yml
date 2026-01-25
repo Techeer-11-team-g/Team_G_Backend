@@ -1,6 +1,12 @@
 # =============================================================================
 # Prometheus Configuration
 # 메트릭 수집 설정
+#
+# GCP VPC 내부 IP 설정:
+# - App Server: 10.0.0.4
+# - Queue Server: 10.0.0.5
+# - Monitoring Server: 10.0.0.6
+# - Search Server: 10.0.0.3
 # =============================================================================
 
 global:
@@ -35,32 +41,47 @@ scrape_configs:
     static_configs:
       - targets: ['loki:3100']
 
+  # Jaeger - 분산 트레이싱 메트릭
+  - job_name: 'jaeger'
+    static_configs:
+      - targets: ['jaeger:14269']
+
   # =========================================================================
-  # App Server (Django)
-  # 배포 완료 후 실제 IP로 변경하세요
+  # App Server (Django) - 10.0.0.4
   # =========================================================================
   - job_name: 'django'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
     static_configs:
-      - targets: ['APP_SERVER_PRIVATE_IP:8000']
+      - targets: ['10.0.0.4:443']
     metrics_path: /metrics
 
-  # =========================================================================
-  # Queue Server (Redis, RabbitMQ)
-  # 배포 완료 후 실제 IP로 변경하세요
-  # =========================================================================
-  # - job_name: 'redis'
-  #   static_configs:
-  #     - targets: ['QUEUE_SERVER_PRIVATE_IP:9121']
-
-  # - job_name: 'rabbitmq'
-  #   static_configs:
-  #     - targets: ['QUEUE_SERVER_PRIVATE_IP:15692']
+  # Promtail (App Server) - 로그 수집 에이전트 메트릭
+  - job_name: 'promtail-app'
+    static_configs:
+      - targets: ['10.0.0.4:9080']
 
   # =========================================================================
-  # Search Server (OpenSearch)
-  # 배포 완료 후 실제 IP로 변경하세요
+  # Queue Server (Redis, RabbitMQ, Flower) - 10.0.0.5
+  # =========================================================================
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['10.0.0.5:9121']
+
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['10.0.0.5:15692']
+
+  - job_name: 'flower'
+    static_configs:
+      - targets: ['10.0.0.5:5555']
+
+  # =========================================================================
+  # Search Server (OpenSearch) - 10.0.0.3
+  # 현재 비활성화 상태 (메트릭 플러그인 미설치)
   # =========================================================================
   # - job_name: 'opensearch'
   #   static_configs:
-  #     - targets: ['SEARCH_SERVER_PRIVATE_IP:9200']
+  #     - targets: ['10.0.0.3:9200']
   #   metrics_path: /_prometheus/metrics
