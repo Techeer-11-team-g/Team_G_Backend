@@ -119,37 +119,66 @@ def process_image_analysis(
                     span.set("image.size_bytes", len(image_bytes))
                     logger.info(f"Using direct image bytes ({len(image_bytes)} bytes)")
 
-                # Step 1.5: Upload original image to GCS and update UploadedImage URL
-                with create_span(TRACER_NAME, "1.5_upload_original_to_gcs") as span:
-                    span.set("service", "google_cloud_storage")
+                # Step 1.5 + 2: GCS 업로드와 Vision API 병렬 실행
+                from concurrent.futures import ThreadPoolExecutor
+
+                def upload_original_to_gcs():
+                    """원본 이미지를 GCS에 업로드 (병렬 실행)."""
+                    with create_span(TRACER_NAME, "1.5_upload_original_to_gcs") as span:
+                        span.set("service", "google_cloud_storage")
+                        try:
+                            from analyses.models import ImageAnalysis
+                            from google.cloud import storage
+                            import uuid
+
+                            analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
+                            uploaded_image = analysis.uploaded_image
+
+                            if uploaded_image and not uploaded_image.uploaded_image_url:
+                                bucket_name = os.environ.get('GCS_BUCKET_NAME', 'team-g-bucket')
+                                unique_filename = f"uploaded-images/{analysis_id}/{uuid.uuid4().hex}.jpg"
+
+                                client = storage.Client()
+                                bucket = client.bucket(bucket_name)
+                                blob = bucket.blob(unique_filename)
+                                blob.upload_from_string(image_bytes, content_type='image/jpeg')
+
+                                gcs_url = f"https://storage.googleapis.com/{bucket_name}/{unique_filename}"
+                                uploaded_image.uploaded_image_url = gcs_url
+                                uploaded_image.save(update_fields=['uploaded_image_url'])
+
+                                span.set("uploaded_image.url", gcs_url[:100])
+                                logger.info(f"Uploaded original image to GCS: {gcs_url}")
+                        except Exception as e:
+                            logger.warning(f"Failed to upload original image to GCS: {e}")
+                            span.set("upload_error", str(e))
+
+                def detect_objects_vision():
+                    """Vision API로 객체 검출 (병렬 실행)."""
+                    with create_span(TRACER_NAME, "2_detect_objects_vision_api") as span:
+                        span.set("service", "google_vision_api")
+                        with ANALYSIS_DURATION.labels(stage='detect_objects').time():
+                            vision_service = get_vision_service()
+                            items = vision_service.detect_objects_from_bytes(image_bytes)
+                        span.set("detected.count", len(items))
+                        if items:
+                            span.set("detected.categories", ",".join(set(i.category for i in items)))
+                        return items
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    gcs_future = executor.submit(upload_original_to_gcs)
+                    vision_future = executor.submit(detect_objects_vision)
+
+                    # Vision API 결과 대기 (GCS는 백그라운드)
+                    detected_items = vision_future.result()
+                    redis_service.set_analysis_progress(analysis_id, 20)
+
+                    # GCS 업로드 완료 대기 (에러 무시)
                     try:
-                        from analyses.models import ImageAnalysis
-                        from google.cloud import storage
-                        import uuid
-
-                        analysis = ImageAnalysis.objects.select_related('uploaded_image').get(id=analysis_id)
-                        uploaded_image = analysis.uploaded_image
-
-                        # GCS에 원본 이미지 업로드
-                        if uploaded_image and not uploaded_image.uploaded_image_url:
-                            bucket_name = os.environ.get('GCS_BUCKET_NAME', 'team-g-bucket')
-                            unique_filename = f"uploaded-images/{analysis_id}/{uuid.uuid4().hex}.jpg"
-
-                            client = storage.Client()
-                            bucket = client.bucket(bucket_name)
-                            blob = bucket.blob(unique_filename)
-                            blob.upload_from_string(image_bytes, content_type='image/jpeg')
-
-                            # Public URL 생성
-                            gcs_url = f"https://storage.googleapis.com/{bucket_name}/{unique_filename}"
-                            uploaded_image.uploaded_image_url = gcs_url
-                            uploaded_image.save(update_fields=['uploaded_image_url'])
-
-                            span.set("uploaded_image.url", gcs_url[:100])
-                            logger.info(f"Uploaded original image to GCS: {gcs_url}")
+                        gcs_future.result()
                     except Exception as e:
-                        logger.warning(f"Failed to upload original image to GCS: {e}")
-                        span.set("upload_error", str(e))
+                        logger.warning(f"GCS upload failed: {e}")
+
             else:
                 with create_span(TRACER_NAME, "1_download_image_gcs") as span:
                     span.set("service", "google_cloud_storage")
@@ -158,16 +187,16 @@ def process_image_analysis(
                         image_bytes = _download_image(image_url)
                     span.set("image.size_bytes", len(image_bytes))
 
-            # Step 2: Detect objects with Vision API
-            with create_span(TRACER_NAME, "2_detect_objects_vision_api") as span:
-                span.set("service", "google_vision_api")
-                redis_service.set_analysis_progress(analysis_id, 20)
-                with ANALYSIS_DURATION.labels(stage='detect_objects').time():
-                    vision_service = get_vision_service()
-                    detected_items = vision_service.detect_objects_from_bytes(image_bytes)
-                span.set("detected.count", len(detected_items))
-                if detected_items:
-                    span.set("detected.categories", ",".join(set(i.category for i in detected_items)))
+                # Step 2: Detect objects with Vision API
+                with create_span(TRACER_NAME, "2_detect_objects_vision_api") as span:
+                    span.set("service", "google_vision_api")
+                    redis_service.set_analysis_progress(analysis_id, 20)
+                    with ANALYSIS_DURATION.labels(stage='detect_objects').time():
+                        vision_service = get_vision_service()
+                        detected_items = vision_service.detect_objects_from_bytes(image_bytes)
+                    span.set("detected.count", len(detected_items))
+                    if detected_items:
+                        span.set("detected.categories", ",".join(set(i.category for i in detected_items)))
 
             logger.info(f"Detected {len(detected_items)} items")
 
