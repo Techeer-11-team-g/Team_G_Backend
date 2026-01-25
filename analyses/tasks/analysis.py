@@ -579,13 +579,13 @@ def _rerank_results(
     attributes: Optional[object] = None,
 ) -> list[dict]:
     """
-    검색 결과 리랭킹.
+    2단계 리랭킹: 하이브리드 → Claude.
 
-    RerankerConfig.USE_HYBRID가 True면 하이브리드 리랭킹 사용,
-    False거나 실패 시 Claude 리랭킹으로 폴백.
+    1단계: 하이브리드 리랭킹으로 30개 → 10개 빠르게 필터링
+    2단계: Claude 리랭킹으로 10개 → 5개 최종 순위 결정
 
     Args:
-        cropped_bytes: 크롭된 이미지 바이트 (Claude 폴백용)
+        cropped_bytes: 크롭된 이미지 바이트 (Claude용)
         search_results: OpenSearch 검색 결과
         query_embedding: 쿼리 이미지 임베딩 (하이브리드 리랭킹용)
         attributes: 추출된 속성 객체 (하이브리드 리랭킹용)
@@ -593,54 +593,54 @@ def _rerank_results(
     Returns:
         리랭킹된 결과 리스트
     """
-    # 하이브리드 리랭킹 시도
+    # 1단계: 하이브리드 리랭킹 (30 → 10)
+    candidates_for_claude = search_results[:SearchConfig.RERANK_TOP_K]
+
     if RerankerConfig.USE_HYBRID and query_embedding:
         from services.hybrid_reranker import get_hybrid_reranker
 
-        with create_span(TRACER_NAME, "5_rerank_hybrid") as span:
+        with create_span(TRACER_NAME, "5a_rerank_hybrid_filter") as span:
             span.set("method", "hybrid_embedding")
-            span.set("candidates_count", min(SearchConfig.RERANK_TOP_K, len(search_results)))
+            span.set("input_count", len(search_results))
+            span.set("output_count", SearchConfig.RERANK_TOP_K)
 
             try:
                 reranker = get_hybrid_reranker()
-                with ANALYSIS_DURATION.labels(stage='rerank_products').time():
-                    ranked = reranker.rerank(
-                        query_embedding=query_embedding,
-                        candidates=search_results[:SearchConfig.RERANK_TOP_K],
-                        attributes=attributes,
-                        top_k=SearchConfig.FINAL_RESULTS,
-                    )
-                span.set("top_score", ranked[0]['combined_score'] if ranked else 0)
-                logger.info("Hybrid reranking completed")
-                return ranked
+                candidates_for_claude = reranker.rerank(
+                    query_embedding=query_embedding,
+                    candidates=search_results,
+                    attributes=attributes,
+                    top_k=SearchConfig.RERANK_TOP_K,  # 30 → 10
+                )
+                span.set("top_score", candidates_for_claude[0]['combined_score'] if candidates_for_claude else 0)
+                logger.info(f"Hybrid pre-filter: {len(search_results)} → {len(candidates_for_claude)} candidates")
             except Exception as e:
                 span.set("error", str(e))
-                span.set("fallback", "claude_reranking")
-                logger.warning(f"Hybrid reranking failed, falling back to Claude: {e}")
+                logger.warning(f"Hybrid pre-filter failed, using original order: {e}")
 
-    # Claude 리랭킹 (폴백 또는 기본)
+    # 2단계: Claude 리랭킹 (10 → 5)
     from services.gpt4v_service import get_gpt4v_service
 
-    with create_span(TRACER_NAME, "5_rerank_claude") as span:
+    with create_span(TRACER_NAME, "5b_rerank_claude_final") as span:
         span.set("service", "anthropic_claude")
         span.set("purpose", "visual_reranking")
-        span.set("candidates_count", min(SearchConfig.RERANK_TOP_K, len(search_results)))
+        span.set("candidates_count", len(candidates_for_claude))
 
         try:
             gpt4v_service = get_gpt4v_service()
             with ANALYSIS_DURATION.labels(stage='rerank_products').time():
                 ranked = gpt4v_service.rerank_products(
                     query_image_bytes=cropped_bytes,
-                    candidates=search_results[:SearchConfig.RERANK_TOP_K],
+                    candidates=candidates_for_claude,
                     top_k=SearchConfig.FINAL_RESULTS,
                 )
-            logger.info("Claude reranking completed")
+            logger.info(f"Claude final rerank: {len(candidates_for_claude)} → {len(ranked)}")
             return ranked
         except Exception as e:
             span.set("error", str(e))
-            span.set("fallback", "using_original_order")
-            logger.warning(f"Claude reranking failed, using original results: {e}")
-            return search_results[:SearchConfig.FINAL_RESULTS]
+            span.set("fallback", "using_hybrid_order")
+            logger.warning(f"Claude reranking failed, using hybrid results: {e}")
+            return candidates_for_claude[:SearchConfig.FINAL_RESULTS]
 
 
 def _format_item_result(
