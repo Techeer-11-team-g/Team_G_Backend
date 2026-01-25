@@ -7,7 +7,7 @@ import os
 
 # Server socket
 bind = os.getenv('GUNICORN_BIND', '0.0.0.0:8000')
-workers = int(os.getenv('GUNICORN_WORKERS', '3'))
+workers = int(os.getenv('GUNICORN_WORKERS', '1'))
 worker_class = 'sync'
 timeout = 300
 
