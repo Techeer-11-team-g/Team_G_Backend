@@ -482,8 +482,9 @@ class MainOrchestrator:
                         "continue_pending": True
                     }
 
-        # 카테고리 추출
+        # 카테고리 및 브랜드 추출
         extracted_category = self._extract_category(message)
+        extracted_brand = self._extract_brand(message)
 
         # 1. 커머스 관련 (가장 구체적인 키워드, 먼저 체크)
         commerce_keywords = {
@@ -559,7 +560,8 @@ class MainOrchestrator:
                     "intent": "search",
                     "sub_intent": "new_search",
                     "search_params": {
-                        "target_categories": [extracted_category] if extracted_category else []
+                        "target_categories": [extracted_category] if extracted_category else [],
+                        "brand": extracted_brand
                     },
                     "references": {"type": "none"},
                     "reset_context": True  # 컨텍스트 초기화 플래그
@@ -575,7 +577,8 @@ class MainOrchestrator:
                         "intent": "search",
                         "sub_intent": "refine",
                         "search_params": {
-                            "target_categories": [extracted_category] if extracted_category else []
+                            "target_categories": [extracted_category] if extracted_category else [],
+                            "brand": extracted_brand
                         },
                         "references": {"type": "none"}
                     }
@@ -598,7 +601,8 @@ class MainOrchestrator:
                     "intent": "search",
                     "sub_intent": "cross_recommend",
                     "search_params": {
-                        "target_categories": [extracted_category] if extracted_category else []
+                        "target_categories": [extracted_category] if extracted_category else [],
+                        "brand": extracted_brand
                     },
                     "references": {"type": "none"}
                 }
@@ -606,7 +610,8 @@ class MainOrchestrator:
                 "intent": "search",
                 "sub_intent": "new_search",
                 "search_params": {
-                    "target_categories": [extracted_category] if extracted_category else []
+                    "target_categories": [extracted_category] if extracted_category else [],
+                    "brand": extracted_brand
                 },
                 "references": {"type": "none"}
             }
@@ -616,7 +621,8 @@ class MainOrchestrator:
             "intent": "search",
             "sub_intent": "new_search",
             "search_params": {
-                "target_categories": [extracted_category] if extracted_category else []
+                "target_categories": [extracted_category] if extracted_category else [],
+                "brand": extracted_brand
             },
             "references": {"type": "none"}
         }
