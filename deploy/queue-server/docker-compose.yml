@@ -88,6 +88,16 @@ services:
       - redis
     restart: always
 
+  # Flower - Celery 모니터링 대시보드
+  flower:
+    image: mher/flower:0.9.7
+    command: celery --broker=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-rabbitmq123}@rabbitmq:5672// flower --address=0.0.0.0 --port=5555 --prometheus_api=true
+    ports:
+      - "5555:5555"
+    depends_on:
+      - rabbitmq
+    restart: unless-stopped
+
 volumes:
   redis_data:
     driver: local

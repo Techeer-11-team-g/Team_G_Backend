@@ -52,6 +52,12 @@ python manage.py createsuperuser
 python manage.py shell                             # Django interactive shell
 ```
 
+### API Documentation
+```bash
+python manage.py spectacular --validate            # Validate OpenAPI schema
+python manage.py spectacular --file schema.yml     # Export schema to file
+```
+
 ## Architecture
 
 ### Service Layer (`services/`)
@@ -74,6 +80,7 @@ Service modules:
 - `fashn_service.py` - Virtual fitting integration
 - `redis_service.py` - Analysis state management (PENDING → RUNNING → DONE/FAILED)
 - `metrics.py` - Prometheus custom metrics (process, system, business)
+- `base.py` - Base classes (`BaseService`, `ExternalAPIService`, `SingletonMeta`, `retry` decorator) for creating new services
 
 ### OpenSearch Search Module (`services/search/`)
 Modular search implementation split from monolithic `opensearch_client.py`:
@@ -123,8 +130,8 @@ Task modules:
 
 Three named queues with routing in `config/celery.py`:
 - `default` - General tasks
-- `analysis` - Image analysis (high priority)
-- `fitting` - Virtual fitting
+- `analysis` - Image analysis tasks (`analyses.tasks.*`)
+- `fitting` - Virtual fitting tasks (`fittings.tasks.*` only)
 
 ### Django Apps
 - `analyses/` - Core image analysis pipeline
@@ -161,11 +168,16 @@ analysis:{id}:data      # Cached results (24h TTL)
 POST   /uploaded-images          - Upload image (auto_analyze flag triggers pipeline)
 GET    /uploaded-images          - List upload history with results
 GET    /uploaded-images/<id>     - Get image + analysis results
+PATCH  /uploaded-images/<id>/visibility - Toggle public/private
 
 POST   /analyses                 - Trigger analysis on uploaded image
 GET    /analyses/<id>            - Get analysis results
 GET    /analyses/<id>/status     - Poll status from Redis (fast)
 PATCH  /analyses                 - Refine analysis with natural language query
+
+GET    /feed                     - Public feed (Pinterest style, category/style filter)
+GET    /feed/styles              - Available style tags
+GET    /my-history               - User's analysis history
 
 POST   /fittings                 - Create virtual try-on
 GET    /fittings/<id>            - Get fitting result
@@ -174,6 +186,9 @@ POST   /orders                   - Create order
 GET    /orders                   - List orders
 GET    /orders/<id>              - Get order details
 PATCH  /orders/<id>              - Update order status
+GET    /cart-items               - Get cart items
+POST   /cart-items               - Add to cart
+DELETE /cart-items/<id>          - Remove from cart
 
 POST   /chat                     - AI 채팅 (메시지 + 이미지)
 POST   /chat/status              - 분석/피팅 상태 폴링

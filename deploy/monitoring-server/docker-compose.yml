@@ -113,10 +113,11 @@ services:
       - "6831:6831/udp"  # Thrift compact
       - "4317:4317"    # OTLP gRPC
       - "4318:4318"    # OTLP HTTP
+      - "14269:14269"  # Admin/metrics port
     environment:
       - COLLECTOR_OTLP_ENABLED=true
       - SPAN_STORAGE_TYPE=badger
-      - BADGER_EPHEMERAL=false
+      - BADGER_EPHEMERAL=true
       - BADGER_DIRECTORY_VALUE=/badger/data
       - BADGER_DIRECTORY_KEY=/badger/key
     volumes:
