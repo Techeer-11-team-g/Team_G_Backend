@@ -3,41 +3,45 @@ name: Deploy to GCE
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+  workflow_dispatch:  # 수동 실행 버튼
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GCE_ZONE: asia-northeast3-a
+  REGION: asia-northeast3
+  IMAGE_NAME: asia-northeast3-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/team-g/team-g-backend
 
 jobs:
   # ==========================================================================
-  # Build and Push Docker Image
+  # Build and Push Docker Image to GCR
   # ==========================================================================
   build:
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
       - name: Configure Docker for GCR
-        run: gcloud auth configure-docker
+        run: gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet
 
       - name: Build and Push Docker Image
         run: |
-          docker build -t gcr.io/$PROJECT_ID/team-g-backend:${{ github.sha }} .
-          docker build -t gcr.io/$PROJECT_ID/team-g-backend:latest .
-          docker push gcr.io/$PROJECT_ID/team-g-backend:${{ github.sha }}
-          docker push gcr.io/$PROJECT_ID/team-g-backend:latest
+          docker build -t $IMAGE_NAME:${{ github.sha }} -t $IMAGE_NAME:latest .
+          docker push $IMAGE_NAME:${{ github.sha }}
+          docker push $IMAGE_NAME:latest
+          echo "✅ Image pushed: $IMAGE_NAME:${{ github.sha }}"
 
   # ==========================================================================
   # Deploy to App Server
@@ -46,9 +50,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -61,13 +62,10 @@ jobs:
 
       - name: Deploy to App Server
         run: |
-          gcloud compute ssh app-server --zone=$GCE_ZONE --command="
-            cd ~/Team_G_Backend/deploy/app-server && \
-            docker-compose pull && \
-            docker-compose up -d && \
-            docker-compose exec -T web python manage.py migrate --noinput && \
-            docker-compose exec -T web python manage.py collectstatic --noinput
-          "
+          gcloud compute ssh app-server \
+            --zone=$GCE_ZONE \
+            --tunnel-through-iap \
+            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/app-server && sudo docker image prune -f && sudo gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && sudo docker compose pull && sudo docker compose up -d && sudo docker compose exec -T web python manage.py migrate --noinput && sudo docker compose exec -T web python manage.py collectstatic --noinput && echo done'
 
   # ==========================================================================
   # Deploy to Queue Server (Celery)
@@ -76,9 +74,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -91,24 +86,135 @@ jobs:
 
       - name: Deploy to Queue Server
         run: |
-          gcloud compute ssh queue-server --zone=$GCE_ZONE --command="
-            cd ~/Team_G_Backend/deploy/queue-server && \
-            docker-compose pull && \
-            docker-compose up -d
-          "
+          gcloud compute ssh queue-server \
+            --zone=$GCE_ZONE \
+            --tunnel-through-iap \
+            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/queue-server && sudo docker system prune -af && sudo gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && sudo docker compose pull && sudo docker compose up -d && echo done'
 
   # ==========================================================================
-  # Notify Slack
+  # Deploy to Monitoring Server
+  # ==========================================================================
+  deploy-monitoring:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy to Monitoring Server
+        run: |
+          gcloud compute ssh monitoring \
+            --zone=$GCE_ZONE \
+            --tunnel-through-iap \
+            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/monitoring-server && sudo docker system prune -af && sudo docker compose pull && sudo docker compose up -d && echo done'
+
+  # ==========================================================================
+  # Health Check
+  # ==========================================================================
+  health-check:
+    needs: [deploy-app, deploy-queue, deploy-monitoring]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for services to start
+        run: sleep 30
+
+      - name: Check App Server Health
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://teamg-api.duckdns.org/health/)
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            echo "✅ App Server is healthy (HTTP $HTTP_STATUS)"
+          else
+            echo "❌ App Server health check failed (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+
+  # ==========================================================================
+  # Slack Notification
   # ==========================================================================
   notify:
-    needs: [deploy-app, deploy-queue]
+    needs: [deploy-app, deploy-queue, deploy-monitoring, health-check]
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Slack Notification
+      - name: Set deployment status
+        id: status
+        run: |
+          if [ "${{ needs.health-check.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "color=good" >> $GITHUB_OUTPUT
+            echo "message=✅ 배포 성공" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "color=danger" >> $GITHUB_OUTPUT
+            echo "message=❌ 배포 실패" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack Notification
         uses: 8398a7/action-slack@v3
         with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow
+          status: custom
+          custom_payload: |
+            {
+              "attachments": [{
+                "color": "${{ steps.status.outputs.color }}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.status.outputs.message }}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Repository:*\n${{ github.repository }}"
+                      },
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Branch:*\n${{ github.ref_name }}"
+                      },
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"
+                      },
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Author:*\n${{ github.actor }}"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Servers:*\n• App Server: ${{ needs.deploy-app.result }}\n• Queue Server: ${{ needs.deploy-queue.result }}\n• Monitoring: ${{ needs.deploy-monitoring.result }}"
+                    }
+                  },
+                  {
+                    "type": "actions",
+                    "elements": [
+                      {
+                        "type": "button",
+                        "text": {
+                          "type": "plain_text",
+                          "text": "View Workflow"
+                        },
+                        "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                      }
+                    ]
+                  }
+                ]
+              }]
+            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

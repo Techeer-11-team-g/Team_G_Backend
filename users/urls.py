@@ -1,5 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from drf_spectacular.utils import extend_schema_view, extend_schema
 from .views import UserOnboardingView, UserMeView, UserRegisterView, GoogleLoginView
 
 
