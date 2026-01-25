@@ -9,6 +9,7 @@ from .vision_service import VisionService, get_vision_service
 from .fashn_service import FashnService, get_fashn_service
 from .embedding_service import EmbeddingService, get_embedding_service
 from .redis_service import RedisService, get_redis_service, AnalysisStatus
+from .hybrid_reranker import HybridReranker, get_hybrid_reranker
 
 # Base classes for new services (기존 서비스는 그대로 유지)
 from .base import BaseService, ExternalAPIService, SingletonMeta, retry
@@ -41,4 +42,7 @@ __all__ = [
     'RedisService',
     'get_redis_service',
     'AnalysisStatus',
+    # Hybrid Reranker
+    'HybridReranker',
+    'get_hybrid_reranker',
 ]
