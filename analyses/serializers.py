@@ -679,12 +679,25 @@ class FeedDetectedObjectSerializer(serializers.Serializer):
 
     def _build_product_data(self, product):
         """상품 데이터 + 사이즈 목록 구성 (바로 구매 가능하도록 size_code_id, selected_product_id 포함)."""
-        from products.models import SizeCode
+        # prefetch된 size_codes 사용 (N+1 방지)
+        size_codes = getattr(product, '_prefetched_objects_cache', {}).get('size_codes')
+        if size_codes is not None:
+            valid_size_codes = [sc for sc in size_codes if not sc.is_deleted]
+        else:
+            # fallback: prefetch 안 된 경우
+            from products.models import SizeCode
+            valid_size_codes = SizeCode.objects.filter(product=product, is_deleted=False)
 
-        # 사이즈 목록 조회 (selected_product_id 포함)
         sizes = []
-        for size_code in SizeCode.objects.filter(product=product, is_deleted=False):
-            selected = size_code.selections.filter(is_deleted=False).first()
+        for size_code in valid_size_codes:
+            # prefetch된 selections 사용 (N+1 방지)
+            selections = getattr(size_code, '_prefetched_objects_cache', {}).get('selections')
+            if selections is not None:
+                selected = next((s for s in selections if not s.is_deleted), None)
+            else:
+                # fallback: prefetch 안 된 경우
+                selected = size_code.selections.filter(is_deleted=False).first()
+
             sizes.append({
                 'size_code_id': size_code.id,
                 'size_value': size_code.size_value,
