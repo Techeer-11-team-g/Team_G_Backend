@@ -40,7 +40,7 @@ from services.metrics import (
     push_metrics,
 )
 
-from analyses.constants import SearchConfig
+from analyses.constants import SearchConfig, RerankerConfig
 from analyses.utils import normalize_category, create_span
 
 # Import from refactored task modules to avoid duplication
@@ -457,8 +457,13 @@ def _process_detected_item(
             logger.warning(f"No matching products found for item {item_index}")
             return None
 
-        # 4. 리랭킹 (Claude)
-        ranked_results = _rerank_results(cropped_bytes, search_results)
+        # 4. 리랭킹 (하이브리드 또는 Claude 폴백)
+        ranked_results = _rerank_results(
+            cropped_bytes=cropped_bytes,
+            search_results=search_results,
+            query_embedding=embedding,
+            attributes=attributes,
+        )
 
         # 5. GCS URL 가져오기 (이 시점에는 이미 완료됨)
         cropped_image_url = gcs_future.result()
@@ -567,8 +572,53 @@ def _search_opensearch(
     return search_results or []
 
 
-def _rerank_results(cropped_bytes: bytes, search_results: list[dict]) -> list[dict]:
-    """Claude로 리랭킹."""
+def _rerank_results(
+    cropped_bytes: bytes,
+    search_results: list[dict],
+    query_embedding: list[float] = None,
+    attributes: Optional[object] = None,
+) -> list[dict]:
+    """
+    검색 결과 리랭킹.
+
+    RerankerConfig.USE_HYBRID가 True면 하이브리드 리랭킹 사용,
+    False거나 실패 시 Claude 리랭킹으로 폴백.
+
+    Args:
+        cropped_bytes: 크롭된 이미지 바이트 (Claude 폴백용)
+        search_results: OpenSearch 검색 결과
+        query_embedding: 쿼리 이미지 임베딩 (하이브리드 리랭킹용)
+        attributes: 추출된 속성 객체 (하이브리드 리랭킹용)
+
+    Returns:
+        리랭킹된 결과 리스트
+    """
+    # 하이브리드 리랭킹 시도
+    if RerankerConfig.USE_HYBRID and query_embedding:
+        from services.hybrid_reranker import get_hybrid_reranker
+
+        with create_span(TRACER_NAME, "5_rerank_hybrid") as span:
+            span.set("method", "hybrid_embedding")
+            span.set("candidates_count", min(SearchConfig.RERANK_TOP_K, len(search_results)))
+
+            try:
+                reranker = get_hybrid_reranker()
+                with ANALYSIS_DURATION.labels(stage='rerank_products').time():
+                    ranked = reranker.rerank(
+                        query_embedding=query_embedding,
+                        candidates=search_results[:SearchConfig.RERANK_TOP_K],
+                        attributes=attributes,
+                        top_k=SearchConfig.FINAL_RESULTS,
+                    )
+                span.set("top_score", ranked[0]['combined_score'] if ranked else 0)
+                logger.info("Hybrid reranking completed")
+                return ranked
+            except Exception as e:
+                span.set("error", str(e))
+                span.set("fallback", "claude_reranking")
+                logger.warning(f"Hybrid reranking failed, falling back to Claude: {e}")
+
+    # Claude 리랭킹 (폴백 또는 기본)
     from services.gpt4v_service import get_gpt4v_service
 
     with create_span(TRACER_NAME, "5_rerank_claude") as span:

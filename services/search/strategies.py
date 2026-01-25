@@ -457,7 +457,7 @@ class SearchStrategies:
         # k-NN 벡터 유사도 검색
         vector_query = {
             'size': search_k,
-            '_source': ['itemId', 'category', 'brand', 'productName', 'imageUrl', 'price', 'productUrl', 'attributes.colors'],
+            '_source': ['itemId', 'category', 'brand', 'productName', 'imageUrl', 'price', 'productUrl', 'attributes.colors', 'image_vector'],
             'query': {
                 'knn': {
                     'image_vector': {
@@ -501,6 +501,7 @@ class SearchStrategies:
                 'image_url': src.get('imageUrl'),
                 'price': src.get('price'),
                 'product_url': src.get('productUrl'),
+                'embedding': src.get('image_vector'),
             }
 
             # 브랜드/색상 매칭 체크
