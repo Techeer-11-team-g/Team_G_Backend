@@ -48,7 +48,7 @@ class SearchConfig:
     """OpenSearch 검색 관련 설정"""
     K = 30                    # 최종 반환할 검색 결과 수
     SEARCH_K = 400            # 초기 벡터 검색 후보 수
-    RERANK_TOP_K = 10         # 리랭킹 대상 수
+    RERANK_TOP_K = 15         # 리랭킹 대상 수 (하이브리드 필터 후 Claude에 전달)
     FINAL_RESULTS = 5         # 최종 매핑 저장 수
     REFINE_SEARCH_K = 50      # 재분석 시 검색 결과 수
     REFINE_CANDIDATES = 100   # 재분석 시 초기 후보 수
