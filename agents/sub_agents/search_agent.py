@@ -851,7 +851,8 @@ class SearchAgent:
                 ]
             ).get(timeout=30)
 
-            from analyses.models import ObjectProductMapping
+            from analyses.models import ObjectProductMapping, SelectedProduct
+            from products.models import SizeCode
 
             mappings = list(ObjectProductMapping.objects.filter(
                 detected_object__uploaded_image__analyses__id=analysis_id,
@@ -860,7 +861,32 @@ class SearchAgent:
                 'product'
             ).order_by('-confidence_score')[:5])
 
-            products = [self._mapping_to_product(m) for m in mappings]
+            # 배치 sizes 조회
+            product_ids = [m.product.id for m in mappings]
+            sizes_by_product = {}
+            if product_ids:
+                all_size_codes = SizeCode.objects.filter(product_id__in=product_ids, is_deleted=False)
+                size_codes_by_product = {}
+                for sc in all_size_codes:
+                    size_codes_by_product.setdefault(sc.product_id, []).append(sc)
+
+                existing_selected = SelectedProduct.objects.filter(product_id__in=product_ids, is_deleted=False)
+                selected_map = {(sp.product_id, sp.size_code_id): sp for sp in existing_selected}
+
+                for pid in product_ids:
+                    sizes = []
+                    for sc in size_codes_by_product.get(pid, []):
+                        key = (pid, sc.id)
+                        if key in selected_map:
+                            sp = selected_map[key]
+                        else:
+                            sp, _ = SelectedProduct.objects.get_or_create(
+                                product_id=pid, size_code=sc, defaults={'selected_product_inventory': 0}
+                            )
+                        sizes.append({'size': sc.size_value, 'size_code_id': sc.id, 'selected_product_id': sp.id})
+                    sizes_by_product[pid] = sizes
+
+            products = [self._mapping_to_product(m, sizes=sizes_by_product.get(m.product.id, [])) for m in mappings]
 
             if not products:
                 return ResponseBuilder.no_results(
@@ -1568,7 +1594,12 @@ class SearchAgent:
             logger.error(f"Cross category search error: {e}", exc_info=True)
             return self.text_search(message, context)
 
-    def _mapping_to_product(self, mapping, include_bbox: bool = False) -> Dict[str, Any]:
+    def _mapping_to_product(
+        self,
+        mapping,
+        include_bbox: bool = False,
+        sizes: List[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """ObjectProductMapping을 product dict로 변환"""
         product = mapping.product
         detected_obj = mapping.detected_object
@@ -1582,8 +1613,8 @@ class SearchAgent:
             'product_url': product.product_url,
             'category': product.category,
             'confidence_score': mapping.confidence_score,
-            # 사이즈 정보 (selected_product_id 포함)
-            'sizes': self._get_sizes_with_selected_product(product.id)
+            # 사이즈 정보 (미리 조회된 sizes 사용, 없으면 개별 조회)
+            'sizes': sizes if sizes is not None else self._get_sizes_with_selected_product(product.id)
         }
 
         # 이미지 분석 결과일 때만 bbox 포함
@@ -1599,12 +1630,86 @@ class SearchAgent:
         return result
 
     def _normalize_search_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """OpenSearch 결과를 표준 포맷으로 변환"""
+        """OpenSearch 결과를 표준 포맷으로 변환 (배치 쿼리 최적화)"""
+        from products.models import Product, SizeCode
+        from analyses.models import SelectedProduct
+        from django.db.models import Q
+
+        if not results:
+            return []
+
+        # 1. 모든 external_id 수집
+        external_ids = [r.get('product_id') or r.get('itemId') for r in results]
+
+        # 2. 한 번의 쿼리로 모든 Product 조회 (product_url LIKE 검색)
+        url_conditions = Q()
+        for ext_id in external_ids:
+            if ext_id:
+                url_conditions |= Q(product_url__contains=f'/products/{ext_id}')
+
+        products = Product.objects.filter(url_conditions).prefetch_related(
+            'size_codes'
+        ) if url_conditions else []
+
+        # 3. external_id → Product 매핑 생성
+        ext_to_product = {}
+        for product in products:
+            # product_url에서 itemId 추출: .../products/12345 → 12345
+            if product.product_url:
+                url_parts = product.product_url.rstrip('/').split('/products/')
+                if len(url_parts) > 1:
+                    item_id = url_parts[-1].split('/')[0].split('?')[0]
+                    ext_to_product[item_id] = product
+
+        # 4. 필요한 SelectedProduct 한 번에 조회/생성
+        product_ids = [p.id for p in products]
+        size_codes_by_product = {}
+        if product_ids:
+            all_size_codes = SizeCode.objects.filter(
+                product_id__in=product_ids,
+                is_deleted=False
+            ).select_related('product')
+            for sc in all_size_codes:
+                size_codes_by_product.setdefault(sc.product_id, []).append(sc)
+
+            # 기존 SelectedProduct 조회
+            existing_selected = SelectedProduct.objects.filter(
+                product_id__in=product_ids,
+                is_deleted=False
+            ).select_related('size_code')
+            selected_map = {(sp.product_id, sp.size_code_id): sp for sp in existing_selected}
+
+        # 5. 결과 정규화
         normalized = []
         for r in results:
-            product_id = r.get('product_id') or r.get('itemId')
+            external_id = str(r.get('product_id') or r.get('itemId') or '')
+            product = ext_to_product.get(external_id)
+            internal_id = product.id if product else external_id
+
+            # 사이즈 정보 구성
+            sizes = []
+            if product:
+                for sc in size_codes_by_product.get(product.id, []):
+                    key = (product.id, sc.id)
+                    if key in selected_map:
+                        selected_product = selected_map[key]
+                    else:
+                        # 없으면 생성
+                        selected_product, _ = SelectedProduct.objects.get_or_create(
+                            product=product,
+                            size_code=sc,
+                            defaults={'selected_product_inventory': 0}
+                        )
+                        selected_map[key] = selected_product
+
+                    sizes.append({
+                        'size': sc.size_value,
+                        'size_code_id': sc.id,
+                        'selected_product_id': selected_product.id
+                    })
+
             normalized.append({
-                'product_id': product_id,
+                'product_id': internal_id,
                 'brand_name': r.get('brand_name') or r.get('brand', ''),
                 'product_name': r.get('product_name') or r.get('name', ''),
                 'selling_price': r.get('selling_price') or r.get('price', 0),
@@ -1612,21 +1717,33 @@ class SearchAgent:
                 'product_url': r.get('product_url') or r.get('productUrl', ''),
                 'category': r.get('category', ''),
                 'score': r.get('score', 0),
-                'sizes': self._get_sizes_with_selected_product(product_id),
+                'sizes': sizes,
             })
         return normalized
 
     def _get_sizes_with_selected_product(self, product_id) -> List[Dict[str, Any]]:
         """상품의 사이즈별 selected_product_id 조회"""
-        from products.models import SizeCode
+        from products.models import SizeCode, Product
         from analyses.models import SelectedProduct
 
         if not product_id:
             return []
 
-        # SizeCode 조회
+        # 먼저 내부 ID로 Product 조회 시도
+        product = Product.objects.filter(id=product_id).first()
+
+        # 없으면 무신사 itemId로 조회 (product_url에서)
+        if not product:
+            product = Product.objects.filter(
+                product_url__contains=f'/products/{product_id}'
+            ).first()
+
+        if not product:
+            return []
+
+        # SizeCode 조회 (내부 Product ID 사용)
         size_codes = SizeCode.objects.filter(
-            product_id=product_id,
+            product=product,
             is_deleted=False
         )
 
@@ -1634,7 +1751,7 @@ class SearchAgent:
         for sc in size_codes:
             # SelectedProduct 조회 또는 생성
             selected_product, _ = SelectedProduct.objects.get_or_create(
-                product_id=product_id,
+                product=product,
                 size_code=sc,
                 defaults={'selected_product_inventory': 0}
             )
@@ -1744,49 +1861,91 @@ class SearchAgent:
             )
             logger.info(f"Filtering analysis results by category: {category_filter} -> {allowed_categories}")
 
-        all_mappings = queryset.order_by('-confidence_score')
+        all_mappings = list(queryset.order_by('-confidence_score'))
 
-        # 2. detected_object별로 그룹화하여 상품 선택
-        # max_per_category > 1 이면 같은 카테고리에서 여러 상품 반환
-        object_counts = {}  # obj_id -> count
-        results = []
+        # 2. 먼저 선택될 상품들을 결정 (sizes 배치 조회를 위해)
+        object_counts = {}
+        selected_mappings = []
         exclude_ids = set(exclude_product_ids or [])
-        seen_product_ids = set()  # 중복 상품 방지
-
-        # 아이템 타입 키워드
+        seen_product_ids = set()
         item_keywords = self.ITEM_TYPE_KEYWORDS.get(item_type_filter, []) if item_type_filter else []
 
         for mapping in all_mappings:
             obj_id = mapping.detected_object_id
             product = mapping.product
 
-            # 제외 상품 스킵 (재검색 시 이전에 보여준 상품)
             if product.id in exclude_ids:
                 continue
-
-            # 중복 상품 스킵
             if product.id in seen_product_ids:
                 continue
 
-            # 해당 object에서 이미 max_per_category개를 가져왔으면 스킵
             current_count = object_counts.get(obj_id, 0)
             if current_count >= max_per_category:
                 continue
 
             product_name = (product.product_name or '').lower()
-
-            # 아이템 타입 필터 적용 (키워드 매칭)
             if item_keywords:
                 if not any(kw.lower() in product_name for kw in item_keywords):
-                    continue  # 키워드 매칭 안 되면 스킵
+                    continue
 
             object_counts[obj_id] = current_count + 1
             seen_product_ids.add(product.id)
-            results.append(self._mapping_to_product(mapping, include_bbox=True))
+            selected_mappings.append(mapping)
 
-            # 전체 최대 개수 도달 시 종료
-            if len(results) >= total_limit:
+            if len(selected_mappings) >= total_limit:
                 break
+
+        # 3. 선택된 상품들의 sizes 배치 조회
+        from products.models import SizeCode
+        from analyses.models import SelectedProduct
+
+        product_ids = [m.product.id for m in selected_mappings]
+        sizes_by_product = {}
+
+        if product_ids:
+            # SizeCode 배치 조회
+            all_size_codes = SizeCode.objects.filter(
+                product_id__in=product_ids,
+                is_deleted=False
+            )
+            size_codes_by_product = {}
+            for sc in all_size_codes:
+                size_codes_by_product.setdefault(sc.product_id, []).append(sc)
+
+            # SelectedProduct 배치 조회
+            existing_selected = SelectedProduct.objects.filter(
+                product_id__in=product_ids,
+                is_deleted=False
+            )
+            selected_map = {(sp.product_id, sp.size_code_id): sp for sp in existing_selected}
+
+            # 각 상품별 sizes 구성
+            for pid in product_ids:
+                sizes = []
+                for sc in size_codes_by_product.get(pid, []):
+                    key = (pid, sc.id)
+                    if key in selected_map:
+                        selected_product = selected_map[key]
+                    else:
+                        selected_product, _ = SelectedProduct.objects.get_or_create(
+                            product_id=pid,
+                            size_code=sc,
+                            defaults={'selected_product_inventory': 0}
+                        )
+                        selected_map[key] = selected_product
+
+                    sizes.append({
+                        'size': sc.size_value,
+                        'size_code_id': sc.id,
+                        'selected_product_id': selected_product.id
+                    })
+                sizes_by_product[pid] = sizes
+
+        # 4. 결과 생성 (배치 조회된 sizes 사용)
+        results = []
+        for mapping in selected_mappings:
+            product_sizes = sizes_by_product.get(mapping.product.id, [])
+            results.append(self._mapping_to_product(mapping, include_bbox=True, sizes=product_sizes))
 
         if item_type_filter:
             logger.info(f"Item type filter '{item_type_filter}' applied: {len(results)} results")
