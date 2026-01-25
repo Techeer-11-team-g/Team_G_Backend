@@ -122,7 +122,7 @@ class FittingAgent:
         피팅을 위한 이미지 분석 시작
         """
         from analyses.models import UploadedImage, ImageAnalysis
-        from analyses.tasks.analysis import process_image_analysis
+        from analyses.tasks.analysis import process_image_analysis, extract_style_tags_task
 
         # 저장된 이미지 가져오기
         image_b64 = context.get('fitting_source_image')
@@ -150,6 +150,12 @@ class FittingAgent:
                 analysis_id=analysis.id,
                 image_url=None,
                 user_id=self.user_id,
+                image_b64=image_b64
+            )
+
+            # 3-1. 스타일 태그 추출 (병렬 실행)
+            extract_style_tags_task.delay(
+                uploaded_image_id=uploaded_image.id,
                 image_b64=image_b64
             )
 
