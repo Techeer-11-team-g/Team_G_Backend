@@ -85,6 +85,21 @@ class User(AbstractUser):
         verbose_name='삭제 여부',
     )
 
+    # === 소셜 로그인 ===
+    social_provider = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        verbose_name='소셜 로그인 제공자',  # 'google', 'kakao', etc.
+    )
+    social_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name='소셜 ID',
+        db_index=True,
+    )
+
     class Meta:
         db_table = 'user'
         verbose_name = '사용자'

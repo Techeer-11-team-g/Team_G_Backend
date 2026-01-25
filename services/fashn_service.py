@@ -44,20 +44,26 @@ class FashnService:
     BASE_URL = "https://thenewblack.ai/api/1.1/wf"
 
     ENDPOINTS = {
-        'upper_body': 'vto',
-        'lower_body': 'vto',
-        'dresses': 'vto',
-        'top': 'vto',
-        'bottom': 'vto',
+        'upper_body': 'vto_stream',
+        'lower_body': 'vto_stream',
+        'dresses': 'vto_stream',
+        'top': 'vto_stream',
+        'bottom': 'vto_stream',
         'bag': 'vto-bag',
         'shoes': 'vto-shoes',
     }
 
     PARAM_CONFIG = {
+        'vto_stream': {
+            'model_param': 'model_photo',
+            'item_param': 'clothing_photo',
+            'extra': {'ratio': 'auto', 'prompt': 'virtual try on'},
+            'has_description': False,
+        },
         'vto': {
             'model_param': 'model_photo',
             'item_param': 'clothing_photo',
-            'extra': {'ratio': '3:4', 'prompt': 'virtual try on'},
+            'extra': {'ratio': 'auto', 'prompt': 'virtual try on'},
             'has_description': True,
         },
         'vto-bag': {
