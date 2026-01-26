@@ -1084,9 +1084,9 @@ class TogglePublicView(APIView):
 
         image.save(update_fields=['is_public', 'updated_at'])
 
-        # 캐시 무효화 (피드 + 해당 사용자 히스토리)
+        # 캐시 무효화 (전체 피드 + 해당 사용자 히스토리)
         redis_service = get_redis_service()
-        redis_service.delete_pattern("feed:cursor:first:*")
+        redis_service.delete_pattern("feed:cursor:*")  # 모든 피드 캐시 삭제
         redis_service.delete_pattern(f"user:{request.user.id}:history:*")
         logger.info(f"Feed and history cache invalidated due to visibility change: image_id={uploaded_image_id}")
 
