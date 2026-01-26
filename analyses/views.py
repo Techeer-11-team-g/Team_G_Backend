@@ -833,8 +833,6 @@ class FeedView(APIView):
             'detected_objects',
             'detected_objects__product_mappings',
             'detected_objects__product_mappings__product',
-            'detected_objects__product_mappings__product__size_codes',
-            'detected_objects__product_mappings__product__size_codes__selections',
         ).distinct().order_by('-created_at')
 
         # 카테고리 필터
@@ -997,8 +995,6 @@ class MyHistoryView(APIView):
             'detected_objects',
             'detected_objects__product_mappings',
             'detected_objects__product_mappings__product',
-            'detected_objects__product_mappings__product__size_codes',
-            'detected_objects__product_mappings__product__size_codes__selections',
         ).order_by('-created_at')
 
         # 커서 기반 페이지네이션
