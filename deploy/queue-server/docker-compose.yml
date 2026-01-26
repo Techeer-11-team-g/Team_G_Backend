@@ -40,10 +40,10 @@ services:
       timeout: 10s
       retries: 5
 
-  # Celery Worker - 외부 API 호출 담당
+  # Celery Worker - 외부 API 호출 담당 (gevent pool for I/O bound tasks)
   celery-worker:
     image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
-    command: celery -A config worker -l info --concurrency=4
+    command: celery -A config worker -l info --concurrency=50 --pool=gevent
     volumes:
       - log_volume:/app/logs
       - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
