@@ -92,9 +92,22 @@ class SearchAgent:
 
     def __init__(self, user_id: int):
         self.user_id = user_id
-        self.opensearch = OpenSearchService()
-        self.embedding_service = get_embedding_service()
         self.redis = get_redis_service()
+        # OpenSearch, embedding은 lazy 초기화 (상태 확인 시 불필요)
+        self._opensearch = None
+        self._embedding_service = None
+
+    @property
+    def opensearch(self):
+        if self._opensearch is None:
+            self._opensearch = OpenSearchService()
+        return self._opensearch
+
+    @property
+    def embedding_service(self):
+        if self._embedding_service is None:
+            self._embedding_service = get_embedding_service()
+        return self._embedding_service
 
     @traced("search_agent.handle")
     def handle(
