@@ -53,14 +53,38 @@ class MainOrchestrator:
         self.session_id = session_id or str(uuid.uuid4())
         self.analysis_id = analysis_id  # 프론트에서 전달받은 분석 ID (컨텍스트 유지용)
 
-        # 서비스 초기화
-        self.langchain = get_langchain_service()
+        # Redis만 즉시 초기화 (경량, 세션 관리에 필수)
         self.redis = get_redis_service()
 
-        # 서브 에이전트 초기화
-        self.search_agent = SearchAgent(user_id)
-        self.fitting_agent = FittingAgent(user_id)
-        self.commerce_agent = CommerceAgent(user_id)
+        # 나머지 서비스/에이전트는 lazy 초기화
+        self._langchain = None
+        self._search_agent = None
+        self._fitting_agent = None
+        self._commerce_agent = None
+
+    @property
+    def langchain(self):
+        if self._langchain is None:
+            self._langchain = get_langchain_service()
+        return self._langchain
+
+    @property
+    def search_agent(self):
+        if self._search_agent is None:
+            self._search_agent = SearchAgent(self.user_id)
+        return self._search_agent
+
+    @property
+    def fitting_agent(self):
+        if self._fitting_agent is None:
+            self._fitting_agent = FittingAgent(self.user_id)
+        return self._fitting_agent
+
+    @property
+    def commerce_agent(self):
+        if self._commerce_agent is None:
+            self._commerce_agent = CommerceAgent(self.user_id)
+        return self._commerce_agent
 
     @traced("orchestrator.process_message", attributes={"user_id": "user_id"})
     def process_message(
