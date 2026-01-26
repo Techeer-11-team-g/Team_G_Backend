@@ -780,6 +780,15 @@ class FeedView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    def _get_cache_key(self, cursor, style, category):
+        """캐시 키 생성"""
+        from services.redis_service import RedisService
+        return RedisService.FEED_CACHE_KEY.format(
+            cursor=cursor or 'first',
+            style=style or 'all',
+            category=category or 'all'
+        )
+
     @extend_schema(
         tags=["Feed"],
         summary="공개 피드 조회",
@@ -793,16 +802,27 @@ class FeedView(APIView):
         responses={200: OpenApiResponse(description="피드 목록")}
     )
     def get(self, request):
-        """공개 피드 조회"""
+        """공개 피드 조회 (Redis 캐시 적용)"""
+        import json
         from django.db.models import Q
         from .serializers import FeedItemSerializer
+        from services.redis_service import RedisService
 
         cursor = request.query_params.get('cursor')
         limit = min(int(request.query_params.get('limit', 20)), 50)  # 최대 50개
         category = request.query_params.get('category')
         style = request.query_params.get('style')
 
-        # 공개 + 분석 완료된 이미지만 조회
+        redis_service = get_redis_service()
+        cache_key = self._get_cache_key(cursor, style, category)
+
+        # 1. 캐시 히트 체크
+        cached = redis_service.get(cache_key)
+        if cached:
+            logger.debug(f"Feed cache hit: {cache_key}")
+            return Response(json.loads(cached))
+
+        # 2. 캐시 미스 → DB 조회
         queryset = UploadedImage.objects.filter(
             is_public=True,
             is_deleted=False,
@@ -860,6 +880,10 @@ class FeedView(APIView):
         if next_cursor:
             response_data['next_cursor'] = next_cursor
 
+        # 3. 캐시 저장 (5분)
+        redis_service.set(cache_key, json.dumps(response_data), ttl=RedisService.TTL_FEED)
+        logger.debug(f"Feed cache set: {cache_key}")
+
         return Response(response_data)
 
 
@@ -896,10 +920,27 @@ class FeedStylesView(APIView):
         responses={200: OpenApiResponse(description="스타일 태그 목록")}
     )
     def get(self, request):
-        """스타일 태그 목록 반환"""
-        return Response({
-            "styles": self.STYLE_TAGS
-        })
+        """스타일 태그 목록 반환 (Redis 캐시 적용)"""
+        import json
+        from services.redis_service import RedisService
+
+        redis_service = get_redis_service()
+        cache_key = RedisService.FEED_STYLES_KEY
+
+        # 1. 캐시 히트 체크
+        cached = redis_service.get(cache_key)
+        if cached:
+            logger.debug(f"Cache hit: {cache_key}")
+            return Response(json.loads(cached))
+
+        # 2. 응답 데이터 구성
+        data = {"styles": self.STYLE_TAGS}
+
+        # 3. 캐시 저장 (24시간)
+        redis_service.set(cache_key, json.dumps(data), ttl=RedisService.TTL_FEED_STYLES)
+        logger.debug(f"Cache set: {cache_key}")
+
+        return Response(data)
 
 
 class MyHistoryView(APIView):
@@ -909,6 +950,14 @@ class MyHistoryView(APIView):
     GET /api/v1/my-history - 본인의 이미지 분석 히스토리 조회
     """
     permission_classes = [IsAuthenticated]
+
+    def _get_cache_key(self, user_id, cursor):
+        """사용자별 캐시 키 생성"""
+        from services.redis_service import RedisService
+        return RedisService.USER_HISTORY_KEY.format(
+            user_id=user_id,
+            cursor=cursor or 'first'
+        )
 
     @extend_schema(
         tags=["Feed"],
@@ -921,13 +970,25 @@ class MyHistoryView(APIView):
         responses={200: OpenApiResponse(description="히스토리 목록")}
     )
     def get(self, request):
-        """내 히스토리 조회"""
+        """내 히스토리 조회 (Redis 캐시 적용)"""
+        import json
         from .serializers import FeedItemSerializer
+        from services.redis_service import RedisService
 
+        user_id = request.user.id
         cursor = request.query_params.get('cursor')
         limit = min(int(request.query_params.get('limit', 20)), 50)
 
-        # 본인의 이미지만 조회 (삭제되지 않은 것)
+        redis_service = get_redis_service()
+        cache_key = self._get_cache_key(user_id, cursor)
+
+        # 1. 캐시 히트 체크
+        cached = redis_service.get(cache_key)
+        if cached:
+            logger.debug(f"History cache hit: {cache_key}")
+            return Response(json.loads(cached))
+
+        # 2. 캐시 미스 → DB 조회
         queryset = UploadedImage.objects.filter(
             user=request.user,
             is_deleted=False,
@@ -969,6 +1030,10 @@ class MyHistoryView(APIView):
         response_data = {'items': serializer.data}
         if next_cursor:
             response_data['next_cursor'] = next_cursor
+
+        # 3. 캐시 저장 (10분)
+        redis_service.set(cache_key, json.dumps(response_data), ttl=RedisService.TTL_USER_HISTORY)
+        logger.debug(f"History cache set: {cache_key}")
 
         return Response(response_data)
 
@@ -1018,6 +1083,11 @@ class TogglePublicView(APIView):
             image.is_public = not image.is_public
 
         image.save(update_fields=['is_public', 'updated_at'])
+
+        # 피드 캐시 무효화 (공개 상태 변경 시 피드 첫 페이지 갱신 필요)
+        redis_service = get_redis_service()
+        redis_service.delete_pattern("feed:cursor:first:*")
+        logger.info(f"Feed cache invalidated due to visibility change: image_id={uploaded_image_id}")
 
         return Response({
             'id': image.id,

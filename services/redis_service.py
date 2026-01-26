@@ -40,6 +40,16 @@ class RedisService:
     TTL_REFINE = 30 * 60            # 30분 - 재분석 상태 폴링용
     TTL_DATA_CACHE = 24 * 60 * 60   # 24시간 - 분석 결과 데이터 캐시
 
+    # 피드/히스토리 캐시용 TTL
+    TTL_FEED = 5 * 60               # 5분 - 피드 목록 캐시
+    TTL_FEED_STYLES = 24 * 60 * 60  # 24시간 - 스타일 태그 (정적 데이터)
+    TTL_USER_HISTORY = 10 * 60      # 10분 - 사용자 히스토리 캐시
+
+    # 피드/히스토리 캐시 키 패턴
+    FEED_CACHE_KEY = 'feed:cursor:{cursor}:style:{style}:cat:{category}'
+    FEED_STYLES_KEY = 'feed:styles'
+    USER_HISTORY_KEY = 'user:{user_id}:history:cursor:{cursor}'
+
     # 하위 호환성을 위한 기본값 (신규 코드는 용도별 TTL 사용 권장)
     DEFAULT_TTL = TTL_POLLING
 
@@ -346,6 +356,34 @@ class RedisService:
         except redis.RedisError as e:
             logger.error(f"Redis expire error: {e}")
             return False
+
+    def delete_pattern(self, pattern: str) -> int:
+        """
+        Delete all keys matching the pattern using SCAN (production-safe).
+        
+        Args:
+            pattern: Redis key pattern (e.g., 'feed:cursor:first:*')
+            
+        Returns:
+            Number of keys deleted
+        """
+        deleted_count = 0
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = self.client.scan(cursor=cursor, match=pattern, count=100)
+                if keys:
+                    self.client.delete(*keys)
+                    deleted_count += len(keys)
+                    logger.debug(f"Deleted {len(keys)} keys matching '{pattern}'")
+                if cursor == 0:
+                    break
+            if deleted_count > 0:
+                logger.info(f"Total deleted {deleted_count} keys matching '{pattern}'")
+            return deleted_count
+        except redis.RedisError as e:
+            logger.error(f"Redis delete_pattern error: {e}")
+            return 0
 
 
 # Singleton instance

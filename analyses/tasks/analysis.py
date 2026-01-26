@@ -364,6 +364,15 @@ def analysis_complete_callback(
             logger.info(f"Analysis {analysis_id} completed: {len(valid_results)}/{total_items} items processed")
             ctx.set("status", "DONE")
 
+            # 피드 및 사용자 히스토리 캐시 무효화
+            try:
+                redis_service.delete_pattern("feed:cursor:first:*")
+                if user_id:
+                    redis_service.delete_pattern(f"user:{user_id}:history:*")
+                logger.info(f"Feed and history cache invalidated for analysis {analysis_id}")
+            except Exception as cache_err:
+                logger.warning(f"Cache invalidation failed: {cache_err}")
+
             push_metrics()
 
             # 스타일 태그 추출은 분석 시작 시 병렬로 실행됨 (views.py에서 호출)
