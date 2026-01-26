@@ -691,12 +691,12 @@ class FeedDetectedObjectSerializer(serializers.Serializer):
         sizes = []
         for size_code in valid_size_codes:
             # prefetch된 selections 사용 (N+1 방지)
+            # prefetch 안 된 경우 fallback 쿼리 하지 않음 (Feed에서는 불필요)
             selections = getattr(size_code, '_prefetched_objects_cache', {}).get('selections')
             if selections is not None:
                 selected = next((s for s in selections if not s.is_deleted), None)
             else:
-                # fallback: prefetch 안 된 경우
-                selected = size_code.selections.filter(is_deleted=False).first()
+                selected = None  # fallback 쿼리 안 함
 
             sizes.append({
                 'size_code_id': size_code.id,

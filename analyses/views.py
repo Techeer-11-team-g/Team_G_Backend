@@ -834,7 +834,6 @@ class FeedView(APIView):
             'detected_objects__product_mappings',
             'detected_objects__product_mappings__product',
             'detected_objects__product_mappings__product__size_codes',
-            'detected_objects__product_mappings__product__size_codes__selections',
         ).distinct().order_by('-created_at')
 
         # 카테고리 필터
