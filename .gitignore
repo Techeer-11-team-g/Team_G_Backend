@@ -84,8 +84,8 @@ FASHIONCLIP_MIGRATION.md
 test_pipeline.py
 test_*.py
 
-# Documentation (local only)
-docs/
+# Documentation - images are tracked for README
+# docs/  # Removed to allow docs/images/ for GitHub README
 
 # Crash dumps
 erl_crash.dump
