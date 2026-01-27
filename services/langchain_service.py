@@ -15,9 +15,9 @@ from django.conf import settings
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.openai_functions import PydanticOutputFunctionsParser
-from langchain_core.utils.function_calling import convert_pydantic_to_openai_function
+from langchain_core.utils.function_calling import convert_to_openai_function
 from langchain.schema import AIMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from langchain_core.pydantic_v1 import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +285,7 @@ class LangChainService:
         )
 
         # Intent Classification Chain: prompt | llm | parser
-        intent_fn = convert_pydantic_to_openai_function(FashionIntent)
+        intent_fn = convert_to_openai_function(FashionIntent)
         self._intent_parser = PydanticOutputFunctionsParser(pydantic_schema=FashionIntent)
         self._intent_llm = self._structured_llm.bind(
             functions=[intent_fn],
@@ -293,7 +293,7 @@ class LangChainService:
         )
 
         # Refine Query Parsing Chain: prompt | llm | parser
-        refine_fn = convert_pydantic_to_openai_function(FashionQueryParsed)
+        refine_fn = convert_to_openai_function(FashionQueryParsed)
         self._refine_parser = PydanticOutputFunctionsParser(pydantic_schema=FashionQueryParsed)
         self._refine_llm = self._structured_llm.bind(
             functions=[refine_fn],
@@ -639,11 +639,11 @@ Respond in JSON format:
             result: FashionQueryParsed = self._refine_parser.invoke(ai_message)
 
             # Pydantic 객체 → dict 변환 (기존 인터페이스 유지)
-            result_dict = result.model_dump()
+            result_dict = result.dict()
 
             # requests 내 Pydantic 객체도 dict로 변환
             result_dict['requests'] = [
-                req.model_dump(exclude_none=True) for req in result.requests
+                req.dict(exclude_none=True) for req in result.requests
             ]
 
             # 대화 히스토리 저장 (Redis)
