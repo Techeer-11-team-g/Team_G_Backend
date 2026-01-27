@@ -30,6 +30,10 @@
 
 # 📣 Introduction
 
+<p align="center">
+<img src="docs/images/Convert to GIF project.gif" alt="Introduction"/>
+</p>
+
 ## URL
 > https://www.dressense.store/
 
@@ -40,23 +44,29 @@
 
 ## 메인 페이지
 > 개인 및 전체 사용자 피드를 조회하고, 기존에 분석한 결과를 참조할 수 있습니다.
-
+<p align="center">
 <img src="docs/images/Adobe Express - Screen Recording 2026-01-27 at 5.00.13 PM.gif" alt="Main Page"/>
+</p>
 
 ## AI 이미지 분석
 > 업로드한 이미지에서 패션 아이템을 자동으로 감지하고 유사 상품을 검색합니다.
-
+<p align="center">
 <img src="docs/images/이미지 분석.gif" alt="Image Analysis"/>
+</p>
 
 ## 가상 피팅
 > 원하는 옷을 선택하면 AI가 내 모습에 가상으로 입혀줍니다.
 
+<p align="center">
 <img src="docs/images/가상피팅.gif" alt="Virtual Fitting"/>
+</p>
 
 ## AI 채팅 어시스턴트
 > "이 옷이랑 어울리는 바지 찾아줘", "이거 입어볼래" 같은 자연어 명령을 지원합니다.
 
+<p align="center">
 <img src="docs/images/채팅_어시스턴트.gif" alt="AI Chat"/>
+</p>
 
 # 🏗 System Architecture
 <img width="100%" src="docs/images/system-architecture.png" alt="System Architecture"/>
@@ -151,9 +161,6 @@
 </table>
 
 # 📊 Monitoring
-
-> Prometheus + Grafana + Loki + Jaeger 기반의 통합 모니터링 시스템
-
 ## Grafana Dashboard (Loki)
 <img width="100%" src="docs/images/grafana-loki-dashboard.png" alt="Grafana Loki Dashboard"/>
 
