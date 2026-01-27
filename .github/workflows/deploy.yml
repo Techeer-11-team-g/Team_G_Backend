@@ -122,18 +122,20 @@ jobs:
     needs: [deploy-app, deploy-queue, deploy-monitoring]
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for services to start
-        run: sleep 30
-
       - name: Check App Server Health
         run: |
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://teamg-api.duckdns.org/health/)
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "✅ App Server is healthy (HTTP $HTTP_STATUS)"
-          else
-            echo "❌ App Server health check failed (HTTP $HTTP_STATUS)"
-            exit 1
-          fi
+          echo "⏳ Waiting for app server to be ready..."
+          for i in $(seq 1 12); do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 https://teamg-api.duckdns.org/health/) || true
+            if [ "$HTTP_STATUS" -eq 200 ]; then
+              echo "✅ App Server is healthy (HTTP $HTTP_STATUS)"
+              exit 0
+            fi
+            echo "  Attempt $i/12 - HTTP $HTTP_STATUS, retrying in 10s..."
+            sleep 10
+          done
+          echo "❌ App Server health check failed after 120s"
+          exit 1
 
   # ==========================================================================
   # Slack Notification
