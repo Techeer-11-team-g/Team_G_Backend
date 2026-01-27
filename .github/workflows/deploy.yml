@@ -65,7 +65,7 @@ jobs:
           gcloud compute ssh app-server \
             --zone=$GCE_ZONE \
             --tunnel-through-iap \
-            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/app-server && sudo docker image prune -f && sudo gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && sudo docker compose pull && sudo docker compose up -d && sudo docker compose exec -T web python manage.py migrate --noinput && sudo docker compose exec -T web python manage.py collectstatic --noinput && echo done'
+            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/app-server && sudo docker compose down && sudo docker system prune -af && sudo gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && sudo docker compose pull && sudo docker compose up -d && sudo docker compose exec -T web python manage.py migrate --noinput && sudo docker compose exec -T web python manage.py collectstatic --noinput && echo done'
 
   # ==========================================================================
   # Deploy to Queue Server (Celery)
@@ -89,7 +89,7 @@ jobs:
           gcloud compute ssh queue-server \
             --zone=$GCE_ZONE \
             --tunnel-through-iap \
-            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/queue-server && sudo docker system prune -af && sudo gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && sudo docker compose pull && sudo docker compose up -d && echo done'
+            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/queue-server && sudo docker compose down && sudo docker system prune -af && sudo gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet && sudo docker compose pull && sudo docker compose up -d && echo done'
 
   # ==========================================================================
   # Deploy to Monitoring Server
@@ -113,7 +113,7 @@ jobs:
           gcloud compute ssh monitoring \
             --zone=$GCE_ZONE \
             --tunnel-through-iap \
-            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/monitoring-server && sudo docker system prune -af && sudo docker compose pull && sudo docker compose up -d && echo done'
+            --command='sudo chown -R $USER:$USER /home/jwon000310/Team_G_Backend && git config --global --add safe.directory /home/jwon000310/Team_G_Backend && cd /home/jwon000310/Team_G_Backend && git fetch origin main && git reset --hard origin/main && cd deploy/monitoring-server && sudo docker compose down && sudo docker system prune -af && sudo docker compose pull && sudo docker compose up -d && echo done'
 
   # ==========================================================================
   # Health Check
