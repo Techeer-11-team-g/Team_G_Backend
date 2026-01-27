@@ -280,44 +280,44 @@ celery -A config worker -l info
 <table>
   <tr>
     <td align="center" width="150">
-      <a href="https://github.com/username1">
-        <img src="docs/images/member1.png" width="100" height="100" style="border-radius:50%"/><br/>
-        <sub><b>팀원1</b></sub>
+      <a href="https://github.com/jungwon123">
+        <img src="docs/images/조르디(이정원).png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>이정원</b></sub>
       </a><br/>
       <sub>Team Leader</sub><br/>
+      <sub>Frontend, Backend</sub>
+    </td>
+    <td align="center" width="150">
+      <a href="https://github.com/Pionia5375">
+        <img src="docs/images/조르디(이정).png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>이정</b></sub>
+      </a><br/>
+      <sub>Team Member</sub><br/>
       <sub>Backend, DevOps</sub>
     </td>
     <td align="center" width="150">
-      <a href="https://github.com/username2">
-        <img src="docs/images/member2.png" width="100" height="100" style="border-radius:50%"/><br/>
-        <sub><b>팀원2</b></sub>
+      <a href="https://github.com/yoonchaerin">
+        <img src="docs/images/조르디(윤채린).jpeg" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>윤채린</b></sub>
       </a><br/>
-      <sub>Backend</sub><br/>
-      <sub>AI Pipeline</sub>
+      <sub>Team Member</sub><br/>
+      <sub>Backend</sub>
     </td>
     <td align="center" width="150">
-      <a href="https://github.com/username3">
-        <img src="docs/images/member3.png" width="100" height="100" style="border-radius:50%"/><br/>
-        <sub><b>팀원3</b></sub>
+      <a href="https://github.com/kyuho11488/kyuho11488.git">
+        <img src="docs/images/조르디(이규호).png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>이규호</b></sub>
       </a><br/>
-      <sub>Backend</sub><br/>
-      <sub>Search & DB</sub>
+      <sub>Team Member</sub><br/>
+      <sub>Backend</sub>
     </td>
     <td align="center" width="150">
-      <a href="https://github.com/username4">
-        <img src="docs/images/member4.png" width="100" height="100" style="border-radius:50%"/><br/>
-        <sub><b>팀원4</b></sub>
+      <a href="https://github.com/c0ding01seo-tech">
+        <img src="docs/images/조르디(노연서).png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>노연서</b></sub>
       </a><br/>
-      <sub>Frontend</sub><br/>
-      <sub>UI/UX</sub>
-    </td>
-    <td align="center" width="150">
-      <a href="https://github.com/username5">
-        <img src="docs/images/member5.png" width="100" height="100" style="border-radius:50%"/><br/>
-        <sub><b>팀원5</b></sub>
-      </a><br/>
-      <sub>Frontend</sub><br/>
-      <sub>Design</sub>
+      <sub>Team Member</sub><br/>
+      <sub>Backend</sub>
     </td>
   </tr>
 </table>
