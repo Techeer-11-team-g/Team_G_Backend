@@ -1,727 +1,312 @@
-# Team_G_Backend
+<p align="center">
+  <img src="docs/images/logo.png" width="300" alt="DRESSENSE Logo"/>
+</p>
 
-이미지 기반 상품 탐색 + 가상 피팅 + 원터치 구매 웹 서비스의 백엔드입니다. 안녕하세요
+<h1 align="center">DRESSENSE</h1>
 
-## 서비스 흐름
+<p align="center">
+  <strong>AI 기반 패션 이미지 검색 & 가상 피팅 플랫폼</strong><br/>
+  <sub>사진 한 장으로 원하는 옷 찾고, 입어보고, 구매까지</sub>
+</p>
 
-```
-사용자가 이미지 업로드
-       ↓
-Google Vision API로 패션 아이템 탐지 (신발, 가방, 상의, 하의 등)
-       ↓
-각 아이템을 크롭하여 OpenAI로 벡터화
-       ↓
-OpenSearch에서 유사 상품 검색
-       ↓
-LangChain으로 검색 품질 평가
-       ↓
-결과 반환 (bbox 오버레이 + 매칭 상품)
-       ↓
-(선택) fashn.ai로 가상 피팅
-```
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11.8-3776AB?style=flat-square&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Django-4.2%20LTS-092E20?style=flat-square&logo=django&logoColor=white"/>
+  <img src="https://img.shields.io/badge/OpenSearch-2.11-005EB8?style=flat-square&logo=opensearch&logoColor=white"/>
+  <img src="https://img.shields.io/badge/GCP-Deployed-4285F4?style=flat-square&logo=googlecloud&logoColor=white"/>
+</p>
 
----
-
-## 목차
-
-1. [기술 스택](#기술-스택)
-2. [프로젝트 구조](#프로젝트-구조)
-3. [초기 세팅 가이드](#초기-세팅-가이드)
-4. [환경변수 설정](#환경변수-설정)
-5. [서비스별 설명](#서비스별-설명)
-6. [자주 쓰는 명령어](#자주-쓰는-명령어)
-7. [트러블슈팅](#트러블슈팅)
+<p align="center">
+  <a href="#-introduction">Introduction</a> •
+  <a href="#-demo">Demo</a> •
+  <a href="#-architecture">Architecture</a> •
+  <a href="#-tech-stack">Tech Stack</a> •
+  <a href="#-monitoring">Monitoring</a> •
+  <a href="#-getting-started">Getting Started</a> •
+  <a href="#-team">Team</a>
+</p>
 
 ---
 
-## 기술 스택
+## 📣 Introduction
 
-### 이게 뭔지 모르겠다면?
+> 길거리에서 본 옷, SNS에서 스쳐간 코디...
+> "이 옷 어디서 살 수 있지?" 더 이상 고민하지 마세요.
 
-| 기술                      | 한줄 설명                                                |
-| ------------------------- | -------------------------------------------------------- |
-| **Django**                | Python으로 웹서버 만드는 프레임워크 (Spring 같은 것)     |
-| **Django REST Framework** | Django에서 API 쉽게 만들게 해주는 도구                   |
-| **Celery**                | 오래 걸리는 작업을 백그라운드에서 처리 (예: 이미지 분석) |
-| **RabbitMQ**              | Celery한테 "이 작업 해줘" 라고 전달하는 메신저           |
-| **Redis**                 | 빠른 임시 저장소 (분석 상태 저장용)                      |
-| **MySQL**                 | 메인 데이터베이스 (사용자, 상품, 분석결과 저장)          |
-| **OpenSearch**            | 벡터 검색용 (유사 상품 찾기)                             |
-| **LangChain**             | OpenAI GPT를 쉽게 쓰게 해주는 도구                       |
-| **Docker**                | 모든 서비스를 패키징해서 어디서든 동일하게 실행          |
+**DRESSENSE**는 이미지 한 장으로 패션 아이템을 검색하고, AI 가상 피팅으로 미리 입어본 뒤, 바로 구매할 수 있는 올인원 패션 플랫폼입니다.
 
-### 전체 기술 스택 표
+### 주요 기능
 
-| 분류           | 기술                  | 버전          | 용도                |
-| -------------- | --------------------- | ------------- | ------------------- |
-| **Backend**    | Python                | 3.11.8 (필수) | 프로그래밍 언어     |
-|                | Django                | 4.2.11 LTS    | 웹 프레임워크       |
-|                | Django REST Framework | 3.14.0        | REST API            |
-|                | Gunicorn              | 21.2.0        | 운영 서버           |
-| **Task Queue** | Celery                | 5.3.6         | 비동기 작업 처리    |
-|                | RabbitMQ              | 3.12          | 메시지 브로커       |
-|                | Redis                 | 7.2           | 캐시 / 상태 저장    |
-| **Database**   | MySQL                 | 8.0           | 메인 DB (Cloud SQL) |
-|                | OpenSearch            | 2.11.1        | 벡터 검색 (k-NN)    |
-| **AI/ML**      | LangChain             | 0.1.16        | LLM 프레임워크      |
-|                | OpenAI API            | -             | GPT, Embeddings     |
-|                | Google Vision API     | -             | 이미지 객체 탐지    |
-|                | fashn.ai              | -             | 가상 피팅           |
-| **Infra**      | Nginx                 | 1.24          | 리버스 프록시       |
-|                | Docker                | 24.x          | 컨테이너화          |
-| **Monitoring** | Prometheus            | 2.48          | 메트릭 수집         |
-|                | Grafana               | 10.2          | 대시보드            |
-| **Storage**    | Google Cloud Storage  | -             | 이미지 저장         |
+| 기능 | 설명 |
+|:---:|:---|
+| 🔍 **AI 이미지 검색** | 사진 속 패션 아이템을 자동 인식하고 유사 상품 검색 |
+| 👗 **가상 피팅** | 선택한 옷을 내 사진에 입혀보는 AI 가상 피팅 |
+| 💬 **AI 쇼핑 어시스턴트** | 자연어로 상품 검색, 추천, 피팅 요청 |
+| 🛒 **원터치 구매** | 검색부터 결제까지 끊김 없는 쇼핑 경험 |
 
----
+<br/>
 
-## 프로젝트 구조
+## 🎬 Demo
 
-```
-Team_G_Backend/
-│
-├── config/                      # Django 프로젝트 설정
-│   ├── __init__.py             # Celery 앱 로드
-│   ├── settings.py             # 메인 설정 파일 ⭐
-│   ├── celery.py               # Celery 설정
-│   ├── urls.py                 # URL 라우팅
-│   └── wsgi.py                 # 운영 서버용
-│
-├── services/                    # 외부 API 연결 모듈 ⭐
-│   ├── __init__.py
-│   ├── vision_service.py       # Google Vision API (이미지 분석)
-│   ├── embedding_service.py    # OpenAI Embeddings (벡터 생성)
-│   ├── opensearch_client.py    # OpenSearch (유사 상품 검색)
-│   ├── langchain_service.py    # LangChain (GPT 활용)
-│   ├── fashn_service.py        # fashn.ai (가상 피팅)
-│   ├── redis_service.py        # Redis (상태 관리)
-│   └── rabbitmq_client.py      # RabbitMQ (메시지 큐)
-│
-├── analyses/                    # 이미지 분석 앱
-│   ├── __init__.py
-│   ├── apps.py
-│   └── tasks.py                # Celery 태스크 (분석 파이프라인) ⭐
-│
-├── deploy/                      # 배포 설정
-│   ├── app-server/             # Django 서버
-│   ├── queue-server/           # Celery + Redis + RabbitMQ
-│   ├── search-server/          # OpenSearch
-│   ├── monitoring-server/      # Prometheus + Grafana
-│   └── DEPLOYMENT.md           # 배포 가이드
-│
-├── .github/
-│   └── workflows/
-│       └── deploy.yml          # GitHub Actions CI/CD
-│
-├── venv/                        # 가상환경 (git에 안올라감)
-├── logs/                        # 로그 파일 (git에 안올라감)
-│
-├── .env                         # 환경변수 (git에 안올라감) ⭐
-├── .env.example                 # 환경변수 예시 파일
-├── .gitignore                   # git 제외 파일 목록
-├── requirements.txt             # Python 패키지 목록
-├── Dockerfile                   # Docker 이미지 빌드 설정
-├── docker-compose.yml           # 로컬 개발용 Docker 설정
-└── README.md                    # 이 파일
-```
+### 메인 페이지
+<!-- TODO: 메인페이지 GIF 추가 -->
+<img width="100%" src="docs/images/demo-main.gif" alt="Main Page"/>
 
-### ⭐ 표시된 파일이 중요한 파일입니다!
+### AI 이미지 분석
+> 업로드한 이미지에서 패션 아이템을 자동으로 감지하고 유사 상품을 검색합니다.
 
----
+<!-- TODO: 이미지 분석 데모 GIF 추가 -->
+<img width="100%" src="docs/images/demo-analysis.gif" alt="Image Analysis"/>
 
-## 초기 세팅 가이드
+### 가상 피팅
+> 원하는 옷을 선택하면 AI가 내 모습에 가상으로 입혀줍니다.
 
-### 사전 준비물
+<!-- TODO: 가상 피팅 데모 GIF 추가 -->
+<img width="100%" src="docs/images/demo-fitting.gif" alt="Virtual Fitting"/>
 
-1. **Git** - 코드 다운로드용
-2. **Python 3.11.8 (정확한 버전 필수)** - pyenv로 설치 권장
-3. **Docker Desktop** - [다운로드](https://www.docker.com/products/docker-desktop/)
+### AI 채팅 어시스턴트
+> "이 옷이랑 어울리는 바지 찾아줘", "이거 입어볼래" 같은 자연어 명령 지원
 
-> **중요:** 팀 전체가 Python 3.11.8 버전을 사용합니다. 다른 버전 사용 시 패키지 호환성 문제가 발생할 수 있습니다.
+<!-- TODO: 채팅 데모 GIF 추가 -->
+<img width="100%" src="docs/images/demo-chat.gif" alt="AI Chat"/>
 
-### pyenv로 Python 3.11.8 설치 (권장)
+## 🏗 System Architecture
+<img width="100%" src="docs/images/system-architecture.png" alt="System Architecture"/>
 
-pyenv를 사용하면 여러 Python 버전을 쉽게 관리할 수 있습니다.
+## 🔑 ERD
+<img width="100%" src="docs/images/erd.png" alt="ERD"/>
 
-#### Mac (Homebrew)
+## 📗 API Documentation
 
+<img width="100%" src="docs/images/swagger-1.png" alt="API - Analyses & Chat"/>
+<img width="100%" src="docs/images/swagger-2.png" alt="API - Feed"/>
+<img width="100%" src="docs/images/swagger-4.png" alt="API - Fittings & Orders"/>
+<img width="100%" src="docs/images/swagger-3.png" alt="API - Users & Auth"/>
+
+
+## 💻 Tech Stack
+
+<table>
+  <tr>
+    <th width="140">Category</th>
+    <th>Technologies</th>
+  </tr>
+  <tr>
+    <td align="center"><b>Backend</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Django-092E20?style=for-the-badge&logo=django&logoColor=white"/>
+      <img src="https://img.shields.io/badge/DRF-ff1709?style=for-the-badge&logo=django&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Celery-37814A?style=for-the-badge&logo=celery&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Gunicorn-499848?style=for-the-badge&logo=gunicorn&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><b>AI / ML</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/Google%20Vision-4285F4?style=for-the-badge&logo=google&logoColor=white"/>
+      <img src="https://img.shields.io/badge/FashionCLIP-FF6F00?style=for-the-badge&logo=pytorch&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Claude-191919?style=for-the-badge&logo=anthropic&logoColor=white"/>
+      <img src="https://img.shields.io/badge/OpenAI-412991?style=for-the-badge&logo=openai&logoColor=white"/>
+      <img src="https://img.shields.io/badge/LangChain-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><b>Database</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white"/>
+      <img src="https://img.shields.io/badge/OpenSearch-005EB8?style=for-the-badge&logo=opensearch&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><b>Message Queue</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/RabbitMQ-FF6600?style=for-the-badge&logo=rabbitmq&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Celery-37814A?style=for-the-badge&logo=celery&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><b>Infrastructure</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/GCP-4285F4?style=for-the-badge&logo=googlecloud&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Nginx-009639?style=for-the-badge&logo=nginx&logoColor=white"/>
+      <img src="https://img.shields.io/badge/GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><b>Monitoring</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/Prometheus-E6522C?style=for-the-badge&logo=prometheus&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Grafana-F46800?style=for-the-badge&logo=grafana&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Jaeger-66CFE3?style=for-the-badge&logo=jaeger&logoColor=black"/>
+      <img src="https://img.shields.io/badge/Loki-F46800?style=for-the-badge&logo=grafana&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><b>Virtual Fitting</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/fashn.ai-000000?style=for-the-badge&logoColor=white"/>
+      <img src="https://img.shields.io/badge/TheNewBlack-2EB82E?style=for-the-badge&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><b>Collaboration</b></td>
+    <td>
+      <img src="https://img.shields.io/badge/Slack-4A154B?style=for-the-badge&logo=slack&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Notion-000000?style=for-the-badge&logo=notion&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Figma-F24E1E?style=for-the-badge&logo=figma&logoColor=white"/>
+      <img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white"/>
+    </td>
+  </tr>
+</table>
+
+## 📊 Monitoring
+
+### Distributed Tracing (Jaeger)
+> 분석 파이프라인 각 단계별 소요 시간을 추적합니다.
+
+<img width="100%" src="docs/images/jaeger.png" alt="Jaeger Tracing"/>
+
+### Message Queue (RabbitMQ)
+<img width="100%" src="docs/images/rabbitmq-dashboard.png" alt="RabbitMQ Dashboard"/>
+
+### Logging (Loki & Promtail)
+<img width="100%" src="docs/images/loki-dashboard.png" alt="Loki Dashboard"/>
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Python 3.11.8 (pyenv 권장)
+- Docker & Docker Compose
+- GCP Account (Cloud SQL, GCS, Compute Engine)
+
+### 1. Clone Repository
 ```bash
-# pyenv 설치
-brew install pyenv
-
-# 쉘 설정 추가 (zsh 기준)
-echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
-echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
-echo 'eval "$(pyenv init -)"' >> ~/.zshrc
-
-# 터미널 재시작 또는
-source ~/.zshrc
-
-# Python 3.11.8 설치
-pyenv install 3.11.8
-
-# 전역 설정 (선택사항)
-pyenv global 3.11.8
+git clone https://github.com/Techeer-11-team-g/Team_G_Backend.git
+git clone https://github.com/Techeer-11-team-g/Team_G_Frontend.git
 ```
 
-#### Windows
-
+### 2. Environment Setup
 ```bash
-# Windows에서는 pyenv-win 사용
-# PowerShell (관리자 권한)에서:
-Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/pyenv-win/pyenv-win/master/pyenv-win/install-pyenv-win.ps1" -OutFile "./install-pyenv-win.ps1"; &"./install-pyenv-win.ps1"
-
-# 터미널 재시작 후
-pyenv install 3.11.8
-pyenv global 3.11.8
-```
-
-### 설치 확인 방법
-
-터미널(맥) 또는 명령 프롬프트(윈도우)를 열고:
-
-```bash
-# Git 확인
-git --version
-# 예시 출력: git version 2.39.0
-
-# Python 확인 (반드시 3.11.8이어야 함!)
-python3 --version
-# 예시 출력: Python 3.11.8
-
-# pyenv 확인
-pyenv version
-# 예시 출력: 3.11.8 (set by /path/to/.python-version)
-
-# Docker 확인
-docker --version
-# 예시 출력: Docker version 24.0.0
-```
-
----
-
-### 방법 1: Docker로 실행 (권장 - 가장 쉬움)
-
-```bash
-# 1. 코드 다운로드
-git clone <repository-url>
 cd Team_G_Backend
-
-# 2. 환경변수 파일 만들기
 cp .env.example .env
+# Edit .env with your API keys and credentials
+```
 
-# 3. .env 파일 열어서 수정 (아래 "환경변수 설정" 섹션 참고)
-#    - Mac: open .env
-#    - Windows: notepad .env
+<details>
+<summary><b>📋 Required Environment Variables</b></summary>
 
-# 4. Docker로 모든 서비스 실행
+```bash
+# Django
+SECRET_KEY=your-secret-key
+DEBUG=False
+
+# Database
+DB_NAME=team_g_db
+DB_USER=your-db-user
+DB_PASSWORD=your-db-password
+DB_HOST=your-cloud-sql-ip
+
+# Redis & RabbitMQ
+REDIS_HOST=your-queue-server-ip
+RABBITMQ_HOST=your-queue-server-ip
+
+# AI Services
+OPENAI_API_KEY=sk-xxxxx
+ANTHROPIC_API_KEY=sk-ant-xxxxx
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+
+# Virtual Fitting
+FASHN_API_KEY=your-fashn-key
+
+# Storage
+GCS_BUCKET_NAME=your-bucket
+GCS_PROJECT_ID=your-project-id
+
+# Observability
+JAEGER_HOST=your-monitoring-server-ip
+LOKI_URL=http://your-monitoring-server-ip:3100/loki/api/v1/push
+```
+</details>
+
+### 3. Run with Docker
+```bash
 docker-compose up -d
-
-# 5. 잘 실행됐는지 확인
-docker-compose ps
-
-# 6. 데이터베이스 테이블 생성 (최초 1회만)
 docker-compose exec web python manage.py migrate
-
-# 7. 관리자 계정 만들기 (최초 1회만)
 docker-compose exec web python manage.py createsuperuser
 ```
 
-**접속 확인:**
-
-- Django: http://localhost:8000
-- Django Admin: http://localhost:8000/admin
-
----
-
-### 방법 2: 로컬에서 직접 실행 (코드 수정하면서 개발할 때)
-
-#### Mac/Linux
-
+### 4. Run Locally (Development)
 ```bash
-# 1. 코드 다운로드
-git clone <repository-url>
-cd Team_G_Backend
-
-# 2. Python 버전 확인 (반드시 3.11.8이어야 함!)
-python3 --version
-# Python 3.11.8이 아니면 pyenv로 설치 후 진행
-
-# 3. 가상환경 만들기 (Python 3.11.8로)
-# pyenv가 설치되어 있으면 프로젝트 디렉토리에서 자동으로 3.11.8 사용
-python3 -m venv venv
-
-# 4. 가상환경 활성화
-source venv/bin/activate
-# 성공하면 터미널 앞에 (venv) 표시됨
-
-# 5. Python 버전 재확인
-python --version
-# 반드시 Python 3.11.8 출력되어야 함
-
-# 6. 패키지 설치
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 7. 환경변수 설정
-cp .env.example .env
-# .env 파일 수정
-
-# 8. 데이터베이스 테이블 생성
-python manage.py migrate
-
-# 9. 개발 서버 실행
-python manage.py runserver
-
-# 서버 종료: Ctrl + C
-# 가상환경 종료: deactivate
-```
-
-#### Windows
-
-```bash
-# 1. 코드 다운로드
-git clone <repository-url>
-cd Team_G_Backend
-
-# 2. Python 버전 확인 (반드시 3.11.8이어야 함!)
-python --version
-# Python 3.11.8이 아니면 pyenv-win으로 설치 후 진행
-
-# 3. 가상환경 만들기 (Python 3.11.8로)
-python -m venv venv
-
-# 4. 가상환경 활성화
-venv\Scripts\activate
-# 성공하면 터미널 앞에 (venv) 표시됨
-
-# 5. Python 버전 재확인
-python --version
-# 반드시 Python 3.11.8 출력되어야 함
-
-# 6. 패키지 설치
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# 7. 환경변수 설정
-copy .env.example .env
-# .env 파일 메모장으로 수정
-
-# 8. 데이터베이스 테이블 생성
-python manage.py migrate
-
-# 9. 개발 서버 실행
-python manage.py runserver
-
-# 서버 종료: Ctrl + C
-# 가상환경 종료: deactivate
-```
-
----
-
-## 환경변수 설정
-
-`.env` 파일을 열어서 아래 값들을 수정하세요.
-
-### 필수 설정 (반드시 변경)
-
-```bash
-# Django 보안 키 (아무 긴 문자열로 변경)
-SECRET_KEY=your-super-secret-key-change-this-123456
-
-# OpenAI API 키 (https://platform.openai.com/api-keys 에서 발급)
-OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
-
-# fashn.ai API 키 (https://fashn.ai 에서 발급)
-FASHN_API_KEY=your-fashn-api-key
-```
-
-### Google Cloud 설정 (이미지 분석, 저장용)
-
-```bash
-# GCS 버킷 이름
-GCS_BUCKET_NAME=your-bucket-name
-
-# GCP 프로젝트 ID
-GCS_PROJECT_ID=your-project-id
-
-# 서비스 계정 키 파일 경로
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/your-credentials.json
-```
-
-### 데이터베이스 설정 (로컬 개발 시)
-
-```bash
-# MySQL 설정
-DB_NAME=team_g_db
-DB_USER=root
-DB_PASSWORD=your-password
-DB_HOST=localhost        # Docker: db
-DB_PORT=3306
-```
-
-### 전체 환경변수 목록
-
-| 변수                             | 설명              | 필수 | 예시                      |
-| -------------------------------- | ----------------- | ---- | ------------------------- |
-| `SECRET_KEY`                     | Django 보안키     | O    | 긴 랜덤 문자열            |
-| `DEBUG`                          | 디버그 모드       | X    | True (개발), False (운영) |
-| `OPENAI_API_KEY`                 | OpenAI API 키     | O    | sk-xxxx                   |
-| `FASHN_API_KEY`                  | fashn.ai API 키   | O    | xxxx                      |
-| `GCS_BUCKET_NAME`                | GCS 버킷명        | O    | my-bucket                 |
-| `GOOGLE_APPLICATION_CREDENTIALS` | GCP 인증 파일     | O    | /path/to/key.json         |
-| `DB_PASSWORD`                    | MySQL 비밀번호    | O    | -                         |
-| `REDIS_HOST`                     | Redis 호스트      | X    | localhost                 |
-| `OPENSEARCH_HOST`                | OpenSearch 호스트 | X    | localhost                 |
-
----
-
-## 서비스별 설명
-
-### 1. Vision Service (`services/vision_service.py`)
-
-Google Vision API를 사용해서 이미지에서 패션 아이템을 찾습니다.
-
-```python
-from services import get_vision_service
-
-vision = get_vision_service()
-
-# 이미지에서 패션 아이템 찾기
-items = vision.detect_objects_from_bytes(image_bytes)
-
-# 결과 예시:
-# [
-#   DetectedItem(category='shoes', bbox=BoundingBox(...), confidence=0.95),
-#   DetectedItem(category='bag', bbox=BoundingBox(...), confidence=0.87),
-# ]
-```
-
-### 2. Embedding Service (`services/embedding_service.py`)
-
-이미지나 텍스트를 벡터(숫자 배열)로 변환합니다. 유사한 상품을 찾는데 사용됩니다.
-
-```python
-from services import get_embedding_service
-
-embedding_svc = get_embedding_service()
-
-# 이미지를 벡터로 변환
-vector = embedding_svc.get_image_embedding(image_bytes)
-# 결과: [0.123, -0.456, 0.789, ...] (1536차원 벡터)
-```
-
-### 3. OpenSearch Service (`services/opensearch_client.py`)
-
-벡터로 유사한 상품을 검색합니다 (k-NN 검색).
-
-```python
-from services import OpenSearchService
-
-search = OpenSearchService()
-
-# 유사 상품 검색
-results = search.search_similar_products(
-    embedding=vector,  # 위에서 만든 벡터
-    k=5,               # 상위 5개
-    category='shoes',  # 신발 카테고리에서만
-)
-```
-
-### 4. Redis Service (`services/redis_service.py`)
-
-분석 작업의 상태를 관리합니다 (PENDING → RUNNING → DONE).
-
-```python
-from services import get_redis_service, AnalysisStatus
-
-redis = get_redis_service()
-
-# 상태 설정
-redis.set_analysis_status('analysis-123', AnalysisStatus.RUNNING)
-
-# 상태 확인
-status = redis.get_analysis_status('analysis-123')
-# 결과: 'RUNNING'
-```
-
-### 5. fashn.ai Service (`services/fashn_service.py`)
-
-가상 피팅 이미지를 생성합니다.
-
-```python
-from services import get_fashn_service
-
-fashn = get_fashn_service()
-
-# 가상 피팅 요청
-result = fashn.create_fitting_and_wait(
-    model_image_url='https://...user_photo.jpg',
-    garment_image_url='https://...product.jpg',
-    category='tops',
-)
-# result.output_url → 가상 피팅 결과 이미지 URL
-```
-
-### 6. LangChain Service (`services/langchain_service.py`)
-
-GPT를 활용한 다양한 작업 (검색 품질 평가 등).
-
-```python
-from services import get_langchain_service
-
-llm = get_langchain_service()
-
-# 채팅
-response = llm.chat("이 상품에 대해 설명해줘")
-
-# 검색 결과 품질 평가
-evaluation = llm.evaluate_search_result(
-    category='shoes',
-    confidence=0.9,
-    match_score=0.85,
-    product_id='prod-123',
-)
-```
-
----
-
-## 자주 쓰는 명령어
-
-### Git 명령어
-
-```bash
-# 최신 코드 받기
-git pull
-
-# 내 변경사항 확인
-git status
-
-# 변경사항 저장
-git add .
-git commit -m "작업 내용 설명"
-git push
-```
-
-### 가상환경 명령어
-
-```bash
-# 활성화 (Mac/Linux)
-source venv/bin/activate
-
-# 활성화 (Windows)
-venv\Scripts\activate
-
-# 비활성화
-deactivate
-
-# 새 패키지 설치 후 requirements.txt 업데이트
-pip freeze > requirements.txt
-```
-
-### Django 명령어
-
-```bash
-# 개발 서버 실행
-python manage.py runserver
-
-# 데이터베이스 변경사항 적용
-python manage.py migrate
-
-# 관리자 계정 생성
-python manage.py createsuperuser
-
-# 새 앱 만들기
-python manage.py startapp 앱이름
-```
-
-### Docker 명령어
-
-```bash
-# 모든 서비스 시작
-docker-compose up -d
-
-# 모든 서비스 중지
-docker-compose down
-
-# 로그 보기
-docker-compose logs -f web
-
-# 특정 서비스만 재시작
-docker-compose restart web
-
-# Django 명령어 실행
-docker-compose exec web python manage.py migrate
-```
-
-### Celery 명령어 (로컬 개발 시)
-
-```bash
-# Worker 실행 (별도 터미널에서)
-celery -A config worker -l info
-
-# Beat 실행 (정기 작업용, 별도 터미널에서)
-celery -A config beat -l info
-```
-
----
-
-## 트러블슈팅
-
-### 1. `pip install` 에러 (Python 버전 문제)
-
-**증상:** `pip install -r requirements.txt` 실행 시 에러 (특히 패키지 호환성 에러)
-
-**원인:** Python 버전이 3.11.8이 아닌 경우 발생
-
-**해결:**
-
-```bash
-# 1. 먼저 Python 버전 확인
-python --version
-
-# 2. 3.11.8이 아니면 pyenv로 설치
+# Python 환경 설정
 pyenv install 3.11.8
-
-# 3. 기존 가상환경 삭제
-rm -rf venv              # Mac/Linux
-rmdir /s /q venv         # Windows
-
-# 4. 새로운 가상환경 생성 (프로젝트 폴더에서)
-python3 -m venv venv     # Mac/Linux
-python -m venv venv      # Windows
-
-# 5. 가상환경 활성화
-source venv/bin/activate   # Mac/Linux
-venv\Scripts\activate      # Windows
-
-# 6. pip 업그레이드
-pip install --upgrade pip
-
-# 7. 다시 시도
-pip install -r requirements.txt
-```
-
-> **참고:** 프로젝트 루트에 `.python-version` 파일이 있어서 pyenv 사용 시 자동으로 3.11.8이 선택됩니다.
-
-### 2. 가상환경이 활성화 안됨 또는 Python 버전이 다름
-
-**증상:**
-
-- `source venv/bin/activate` 실행해도 (venv) 안보임
-- 가상환경 활성화 후 `python --version`이 3.11.8이 아님
-
-**해결:**
-
-```bash
-# 1. 먼저 시스템 Python 버전 확인
-python3 --version  # 반드시 3.11.8이어야 함
-
-# 2. 3.11.8이 아니면 pyenv로 설정
-pyenv local 3.11.8  # 현재 디렉토리에 적용
-
-# 3. 가상환경 다시 만들기
-rm -rf venv
-python3 -m venv venv
+pyenv local 3.11.8
+python -m venv venv
 source venv/bin/activate
 
-# 4. 가상환경 Python 버전 확인
-python --version  # Python 3.11.8 출력되어야 함
+# 의존성 설치
+pip install -r requirements.txt
+
+# 서버 실행
+python manage.py runserver
+
+# Celery Worker (별도 터미널)
+celery -A config worker -l info
 ```
 
-### 3. Docker 실행 안됨
+## 👥 Team
 
-**증상:** `docker-compose up` 에러
+<table>
+  <tr>
+    <td align="center" width="150">
+      <a href="https://github.com/username1">
+        <img src="docs/images/member1.png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>팀원1</b></sub>
+      </a><br/>
+      <sub>Team Leader</sub><br/>
+      <sub>Backend, DevOps</sub>
+    </td>
+    <td align="center" width="150">
+      <a href="https://github.com/username2">
+        <img src="docs/images/member2.png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>팀원2</b></sub>
+      </a><br/>
+      <sub>Backend</sub><br/>
+      <sub>AI Pipeline</sub>
+    </td>
+    <td align="center" width="150">
+      <a href="https://github.com/username3">
+        <img src="docs/images/member3.png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>팀원3</b></sub>
+      </a><br/>
+      <sub>Backend</sub><br/>
+      <sub>Search & DB</sub>
+    </td>
+    <td align="center" width="150">
+      <a href="https://github.com/username4">
+        <img src="docs/images/member4.png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>팀원4</b></sub>
+      </a><br/>
+      <sub>Frontend</sub><br/>
+      <sub>UI/UX</sub>
+    </td>
+    <td align="center" width="150">
+      <a href="https://github.com/username5">
+        <img src="docs/images/member5.png" width="100" height="100" style="border-radius:50%"/><br/>
+        <sub><b>팀원5</b></sub>
+      </a><br/>
+      <sub>Frontend</sub><br/>
+      <sub>Design</sub>
+    </td>
+  </tr>
+</table>
 
-**해결:**
-
-1. Docker Desktop이 실행 중인지 확인
-2. 터미널 재시작
-3. `docker-compose down -v` 후 다시 `docker-compose up -d`
-
-### 4. 포트 충돌
-
-**증상:** "port is already in use" 에러
-
-**해결:**
-
-```bash
-# Mac/Linux: 해당 포트 사용 프로세스 찾기
-lsof -i :8000
-
-# 프로세스 종료
-kill -9 <PID>
-```
-
-### 5. 환경변수 인식 안됨
-
-**증상:** `OPENAI_API_KEY not configured` 등의 경고
-
-**해결:**
-
-1. `.env` 파일이 프로젝트 루트에 있는지 확인
-2. 값에 따옴표 없이 입력했는지 확인
-3. 서버 재시작
-
-### 6. MySQL 연결 에러
-
-**증상:** "Can't connect to MySQL server"
-
-**해결 (Docker):**
-
-```bash
-# MySQL 컨테이너 상태 확인
-docker-compose ps db
-
-# 재시작
-docker-compose restart db
-```
-
-**해결 (로컬):**
-
-- MySQL 서버가 실행 중인지 확인
-- `.env`의 DB_HOST, DB_PORT 확인
+<br/>
 
 ---
 
-## 서비스 포트 정리
-
-| 서비스        | 포트  | 접속 URL                    |
-| ------------- | ----- | --------------------------- |
-| Django        | 8000  | http://localhost:8000       |
-| Django Admin  | 8000  | http://localhost:8000/admin |
-| MySQL         | 3306  | -                           |
-| Redis         | 6379  | -                           |
-| RabbitMQ      | 5672  | -                           |
-| RabbitMQ 관리 | 15672 | http://localhost:15672      |
-| OpenSearch    | 9200  | -                           |
-| Grafana       | 3000  | http://localhost:3000       |
-| Prometheus    | 9090  | http://localhost:9090       |
-
----
-
-## 도움이 필요하면?
-
-1. 이 README를 다시 읽어보기
-2. 에러 메시지 구글링
-3. 팀원에게 물어보기
-4. ChatGPT에게 에러 메시지 복붙해서 물어보기
-
----
-
-## 기여 방법
-
-1. `main` 브랜치에서 새 브랜치 생성
-2. 코드 수정
-3. Pull Request 생성
-4. 코드 리뷰 후 머지
-
-```bash
-# 새 브랜치 만들기
-git checkout -b feature/기능이름
-
-# 작업 후 푸시
-git add .
-git commit -m "기능 설명"
-git push origin feature/기능이름
-```
+<p align="center">
+  <sub>Built with by Team G | Techeer 11th</sub>
+</p>

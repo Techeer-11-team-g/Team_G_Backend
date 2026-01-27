@@ -75,6 +75,7 @@ Service modules:
 - `vision_service.py` - Google Vision API wrapper with category normalization
 - `embedding_service.py` - Marqo-FashionCLIP 512-dim embeddings (Apple Silicon compatible with Float64)
 - `gpt4v_service.py` - Claude Vision for attribute extraction + ranking
+- `hybrid_reranker.py` - 2-stage reranking (cosine similarity + OpenSearch score + attribute matching)
 - `opensearch_client.py` - Thin wrapper re-exporting from `services/search/` (backward compatible)
 - `langchain_service.py` - LLM orchestration via LangChain
 - `fashn_service.py` - Virtual fitting integration
@@ -211,7 +212,7 @@ PATCH  /users/profile            - Update profile
 - URL routing: `config/urls.py`
 - OpenTelemetry: `config/tracing.py`
 - Request logging middleware: `config/middleware.py`
-- Environment variables: `.env.example` (200+ variables)
+- Environment variables: `.env` (see `.env.example` for template)
 
 ## Deployment
 
@@ -245,13 +246,19 @@ OpenTelemetry auto-instruments Django, Celery, requests, and gRPC. Custom spans 
 POST /api/v1/analyses
   └── apply_async/process_image_analysis
       └── run/process_image_analysis
-          ├── 0_detect_objects_google_vision
-          ├── 1_crop_image
-          ├── 2_upload_to_gcs
-          ├── 3_extract_attributes_claude
-          ├── 4_generate_embedding_fashionclip
-          ├── 5_search_opensearch_knn
-          ├── 6_rerank_claude
+          ├── 1_decode_image_bytes
+          ├── 1.5_upload_original_to_gcs  ─┐ (parallel)
+          ├── 2_detect_objects_vision_api ─┘
+          ├── 3_encode_image_base64
+          ├── 4_dispatch_parallel_tasks
+          │   └── (per detected object, parallel)
+          │       ├── crop_image
+          │       ├── upload_to_gcs
+          │       ├── extract_attributes_claude
+          │       ├── generate_embedding_fashionclip
+          │       ├── search_opensearch_knn
+          │       ├── 5a_rerank_hybrid_filter  (30→15 candidates)
+          │       └── 5b_rerank_claude_final   (15→5 candidates)
           └── 7_save_results_to_db
 ```
 
@@ -315,6 +322,28 @@ Model is pre-loaded at Celery worker startup via `worker_process_init` signal in
 
 ### GCS Direct Upload Optimization
 When `auto_analyze=True`, base64-encoded images are passed directly to analysis tasks, skipping the GCS round-trip for faster processing.
+
+### 2-Stage Hybrid Reranking
+`services/hybrid_reranker.py`와 `analyses/constants.py`의 `RerankerConfig`:
+1. **1단계 (하이브리드 필터)**: 30개 → 15개 빠르게 필터링
+   - 코사인 유사도 70% + OpenSearch 점수 15% + 속성 매칭 15%
+2. **2단계 (Claude 최종)**: 15개 → 5개 정확한 순위 결정
+   - Claude Vision API로 최종 리랭킹
+
+```python
+# analyses/constants.py
+class RerankerConfig:
+    VISUAL_WEIGHT = 0.70      # 코사인 유사도
+    OPENSEARCH_WEIGHT = 0.15  # k-NN 점수
+    ATTRIBUTE_WEIGHT = 0.15   # 브랜드/색상 매칭
+    USE_HYBRID = True         # False면 Claude only
+```
+
+### Parallel Processing in Analysis Pipeline
+GCS 업로드와 Vision API 호출은 ThreadPoolExecutor로 병렬 실행됨 (`analyses/tasks/analysis.py`).
+
+### MySQL bulk_create Compatibility
+MySQL은 `bulk_create()` 후 ID를 반환하지 않음. `db_operations.py`에서 `max_id_before` 쿼리 후 재조회 방식 사용.
 
 ### AI Agent (Chat) Architecture
 `agents/orchestrator.py`의 MainOrchestrator가 메인 진입점:
