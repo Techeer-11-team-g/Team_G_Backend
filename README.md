@@ -45,7 +45,7 @@
 ## 메인 페이지
 > 개인 및 전체 사용자 피드를 조회하고, 기존에 분석한 결과를 참조할 수 있습니다.
 <p align="center">
-<img src="docs/images/Adobe Express - Screen Recording 2026-01-27 at 5.00.13 PM.gif" alt="Main Page"/>
+<img src="docs/images/main-page.gif" alt="Main Page"/>
 </p>
 
 ## AI 이미지 분석
