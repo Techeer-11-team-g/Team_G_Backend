@@ -3,13 +3,31 @@ Gunicorn configuration file.
 https://docs.gunicorn.org/en/stable/settings.html
 """
 
+import multiprocessing
 import os
 
 # Server socket
 bind = os.getenv('GUNICORN_BIND', '0.0.0.0:8000')
-workers = int(os.getenv('GUNICORN_WORKERS', '1'))
-worker_class = 'sync'
+
+# Workers - (2 * CPU cores) + 1 권장
+# gevent 사용 시 더 적은 워커로도 높은 동시성 처리 가능
+cpu_count = multiprocessing.cpu_count()
+workers = int(os.getenv('GUNICORN_WORKERS', str(cpu_count * 2 + 1)))
+
+# Worker class - gevent for async I/O (requires gevent package)
+worker_class = os.getenv('GUNICORN_WORKER_CLASS', 'gevent')
+
+# Connections per worker (gevent/eventlet only)
+worker_connections = int(os.getenv('GUNICORN_WORKER_CONNECTIONS', '1000'))
+
+# Timeout
 timeout = 300
+
+# Graceful timeout
+graceful_timeout = 30
+
+# Keep-alive connections
+keepalive = 5
 
 # Logging
 loglevel = 'info'

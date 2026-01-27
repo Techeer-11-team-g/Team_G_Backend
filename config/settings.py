@@ -96,8 +96,13 @@ DATABASES = {
         'PASSWORD': os.getenv('DB_PASSWORD', ''),
         'HOST': os.getenv('DB_HOST', 'localhost'),
         'PORT': os.getenv('DB_PORT', '3306'),
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),  # 연결 재사용 (초)
+        'CONN_HEALTH_CHECKS': True,  # Django 4.1+ 연결 상태 확인
         'OPTIONS': {
             'charset': 'utf8mb4',
+            'connect_timeout': 10,
+            'read_timeout': 30,
+            'write_timeout': 30,
         },
     }
 }
