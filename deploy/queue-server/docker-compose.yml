@@ -2,7 +2,7 @@
 # Queue Server (GCE VM 2)
 # - Redis
 # - RabbitMQ
-# - Celery Worker + Beat
+# - Celery Workers (analysis, fitting, default)
 #
 # 외부 API 통신: OpenAI, Google Vision API, fashn-ai
 # =============================================================================
@@ -91,25 +91,6 @@ services:
       - rabbitmq
     restart: always
 
-  # Celery Beat - 스케줄러
-  celery-beat:
-    image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
-    command: celery -A config beat -l info --schedule=/app/celerybeat-schedule
-    volumes:
-      - log_volume:/app/logs
-      - celerybeat_schedule:/app
-      - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
-    env_file:
-      - .env
-    environment:
-      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-rabbitmq123}@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
-    depends_on:
-      - redis
-      - rabbitmq
-      - celery-worker-default
-    restart: always
-
   # Redis Exporter for Prometheus
   redis-exporter:
     image: oliver006/redis_exporter:v1.55.0
@@ -122,22 +103,10 @@ services:
       - redis
     restart: always
 
-  # Flower - Celery 모니터링 대시보드
-  flower:
-    image: mher/flower:0.9.7
-    command: celery --broker=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-rabbitmq123}@rabbitmq:5672// flower --address=0.0.0.0 --port=5555 --prometheus_api=true
-    ports:
-      - "5555:5555"
-    depends_on:
-      - rabbitmq
-    restart: unless-stopped
-
 volumes:
   redis_data:
     driver: local
   rabbitmq_data:
     driver: local
   log_volume:
-    driver: local
-  celerybeat_schedule:
     driver: local
