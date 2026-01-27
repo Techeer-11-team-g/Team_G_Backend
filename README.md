@@ -28,55 +28,43 @@
 
 ---
 
-## 📣 Introduction
+# 📣 Introduction
 
-> 길거리에서 본 옷, SNS에서 스쳐간 코디...
-> "이 옷 어디서 살 수 있지?" 더 이상 고민하지 마세요.
+## URL
+> https://www.dressense.store/
 
-**DRESSENSE**는 이미지 한 장으로 패션 아이템을 검색하고, AI 가상 피팅으로 미리 입어본 뒤, 바로 구매할 수 있는 올인원 패션 플랫폼입니다.
+## MEDIUM
+> https://medium.com/p/817132d67ecb/edit
 
-### 주요 기능
+# 🎬 Demo
 
-| 기능 | 설명 |
-|:---:|:---|
-| 🔍 **AI 이미지 검색** | 사진 속 패션 아이템을 자동 인식하고 유사 상품 검색 |
-| 👗 **가상 피팅** | 선택한 옷을 내 사진에 입혀보는 AI 가상 피팅 |
-| 💬 **AI 쇼핑 어시스턴트** | 자연어로 상품 검색, 추천, 피팅 요청 |
-| 🛒 **원터치 구매** | 검색부터 결제까지 끊김 없는 쇼핑 경험 |
+## 메인 페이지
+> 개인 및 전체 사용자 피드를 조회하고, 기존에 분석한 결과를 참조할 수 있습니다.
 
-<br/>
+<img src="docs/images/Adobe Express - Screen Recording 2026-01-27 at 5.00.13 PM.gif" alt="Main Page"/>
 
-## 🎬 Demo
-
-### 메인 페이지
-<!-- TODO: 메인페이지 GIF 추가 -->
-<img width="100%" src="docs/images/demo-main.gif" alt="Main Page"/>
-
-### AI 이미지 분석
+## AI 이미지 분석
 > 업로드한 이미지에서 패션 아이템을 자동으로 감지하고 유사 상품을 검색합니다.
 
-<!-- TODO: 이미지 분석 데모 GIF 추가 -->
-<img width="100%" src="docs/images/demo-analysis.gif" alt="Image Analysis"/>
+<img src="docs/images/이미지 분석.gif" alt="Image Analysis"/>
 
-### 가상 피팅
+## 가상 피팅
 > 원하는 옷을 선택하면 AI가 내 모습에 가상으로 입혀줍니다.
 
-<!-- TODO: 가상 피팅 데모 GIF 추가 -->
-<img width="100%" src="docs/images/demo-fitting.gif" alt="Virtual Fitting"/>
+<img src="docs/images/가상피팅.gif" alt="Virtual Fitting"/>
 
-### AI 채팅 어시스턴트
-> "이 옷이랑 어울리는 바지 찾아줘", "이거 입어볼래" 같은 자연어 명령 지원
+## AI 채팅 어시스턴트
+> "이 옷이랑 어울리는 바지 찾아줘", "이거 입어볼래" 같은 자연어 명령을 지원합니다.
 
-<!-- TODO: 채팅 데모 GIF 추가 -->
-<img width="100%" src="docs/images/demo-chat.gif" alt="AI Chat"/>
+<img src="docs/images/채팅_어시스턴트.gif" alt="AI Chat"/>
 
-## 🏗 System Architecture
+# 🏗 System Architecture
 <img width="100%" src="docs/images/system-architecture.png" alt="System Architecture"/>
 
-## 🔑 ERD
+# 🔑 ERD
 <img width="100%" src="docs/images/erd.png" alt="ERD"/>
 
-## 📗 API Documentation
+# 📗 API Documentation
 
 <img width="100%" src="docs/images/swagger-1.png" alt="API - Analyses & Chat"/>
 <img width="100%" src="docs/images/swagger-2.png" alt="API - Feed"/>
@@ -84,7 +72,7 @@
 <img width="100%" src="docs/images/swagger-3.png" alt="API - Users & Auth"/>
 
 
-## 💻 Tech Stack
+# 💻 Tech Stack
 
 <table>
   <tr>
@@ -162,33 +150,57 @@
   </tr>
 </table>
 
-## 📊 Monitoring
+# 📊 Monitoring
 
-### Distributed Tracing (Jaeger)
-> 분석 파이프라인 각 단계별 소요 시간을 추적합니다.
+> Prometheus + Grafana + Loki + Jaeger 기반의 통합 모니터링 시스템
 
-<img width="100%" src="docs/images/jaeger.png" alt="Jaeger Tracing"/>
+## Grafana Dashboard (Loki)
+<img width="100%" src="docs/images/grafana-loki-dashboard.png" alt="Grafana Loki Dashboard"/>
 
-### Message Queue (RabbitMQ)
-<img width="100%" src="docs/images/rabbitmq-dashboard.png" alt="RabbitMQ Dashboard"/>
+### **주요 지표:**
+- Total Requests (24h) - 일일 총 요청 수
+- 2xx / 4xx / 5xx - HTTP 상태 코드별 요청 수
+- Total Logs Size - 로그 수집량
+- Requests by Status Code - 시간대별 요청 추이
 
-### Logging (Loki & Promtail)
-<img width="100%" src="docs/images/loki-dashboard.png" alt="Loki Dashboard"/>
+## Prometheus Targets
+<img width="100%" src="docs/images/prometheus-targets-1.png" alt="Prometheus Targets 1"/>
+<img width="100%" src="docs/images/prometheus-targets-2.png" alt="Prometheus Targets 2"/>
 
-## 🚀 Getting Started
+### **수집 대상 (9개 서비스):**
+- `django` - Django 애플리케이션
+- `flower` - Celery 모니터링
+- `jaeger` - 분산 트레이싱
+- `loki` - 로그 수집
+- `node-exporter` - 시스템 메트릭
+- `prometheus` - 메트릭 서버
+- `promtail-app` - 로그 전송
+- `rabbitmq` - 메시지 큐
+- `redis` - 캐시/세션
 
-### Prerequisites
+## Distributed Tracing (Jaeger)
+<img width="100%" src="docs/images/jaeger-search.png" alt="Jaeger Search"/>
+<img width="100%" src="docs/images/jaeger-trace-detail.png" alt="Jaeger Trace Detail"/>
+
+### **트레이스 분석:**
+- API 요청부터 응답까지 전체 흐름 시각화
+- Celery 워커 태스크 실행 시간 측정
+- 병목 구간 식별 및 성능 최적화
+
+# 🚀 Getting Started
+
+## Prerequisites
 - Python 3.11.8 (pyenv 권장)
 - Docker & Docker Compose
 - GCP Account (Cloud SQL, GCS, Compute Engine)
 
-### 1. Clone Repository
+## 1. Clone Repository
 ```bash
 git clone https://github.com/Techeer-11-team-g/Team_G_Backend.git
 git clone https://github.com/Techeer-11-team-g/Team_G_Frontend.git
 ```
 
-### 2. Environment Setup
+## 2. Environment Setup
 ```bash
 cd Team_G_Backend
 cp .env.example .env
@@ -231,14 +243,14 @@ LOKI_URL=http://your-monitoring-server-ip:3100/loki/api/v1/push
 ```
 </details>
 
-### 3. Run with Docker
+## 3. Run with Docker
 ```bash
 docker-compose up -d
 docker-compose exec web python manage.py migrate
 docker-compose exec web python manage.py createsuperuser
 ```
 
-### 4. Run Locally (Development)
+## 4. Run Locally (Development)
 ```bash
 # Python 환경 설정
 pyenv install 3.11.8
@@ -256,7 +268,7 @@ python manage.py runserver
 celery -A config worker -l info
 ```
 
-## 👥 Team
+# 👥 Team
 
 <table>
   <tr>
