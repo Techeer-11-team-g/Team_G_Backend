@@ -292,18 +292,20 @@ class FittingImageSerializer(serializers.ModelSerializer):
     def validate_user_image_url(self, value):
         """
         사용자 이미지 URL을 검증하고 UserImage 객체를 반환합니다.
-        
+
         지원하는 URL 형식:
             - GCS URL: https://storage.googleapis.com/{bucket}/{path}
             - 상대 경로: /media/user-images/...
             - 전체 URL: https://example.com/media/...
-        
+
         Returns:
             UserImage: 검증된 사용자 이미지 객체
-            
+
         Raises:
             ValidationError: 존재하지 않는 URL인 경우
         """
+        # 쿼리 파라미터 제거 (?v=..., ?t=... 등 캐시 버스터)
+        value = value.split('?')[0]
         search_value = value
 
         # GCS URL에서 경로 추출
