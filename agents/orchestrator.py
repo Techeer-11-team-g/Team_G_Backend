@@ -511,12 +511,29 @@ class MainOrchestrator:
         extracted_brand = self._extract_brand(message)
 
         # 1. 커머스 관련 (가장 구체적인 키워드, 먼저 체크)
+        # 1-1. 구매/살래/살게 → 번호 참조 있으면 direct_purchase, 없으면 checkout
+        purchase_keywords = ["구매", "살래", "살게"]
+        if any(kw in message_lower for kw in purchase_keywords):
+            refs = self._extract_references(message)
+            if refs.get('type') == 'index' and refs.get('indices'):
+                return {
+                    "intent": "commerce",
+                    "sub_intent": "direct_purchase",
+                    "references": refs
+                }
+            return {
+                "intent": "commerce",
+                "sub_intent": "checkout",
+                "references": refs
+            }
+
+        # 1-2. 나머지 커머스 키워드
         commerce_keywords = {
             "add_cart": ["담아", "장바구니에 담", "카트에", "장바구니로", "번 장바구니", "담을래", "담기", "카트로"],
             "view_cart": ["장바구니 보", "장바구니 확인", "뭐 담았", "담은 거", "장바구니에 뭐", "장바구니 열", "카트 보"],
             "remove_cart": ["빼", "삭제", "제거", "비워", "장바구니에서"],
-            "size_recommend": ["사이즈", "치수", "몇 사이즈"],
-            "checkout": ["주문", "구매", "결제", "살래", "살게", "계산"],
+            "size_recommend": ["사이즈 추천", "사이즈 알려", "치수 추천", "몇 사이즈"],
+            "checkout": ["주문", "결제", "계산"],
             "order_status": ["배송", "주문 내역", "주문 확인", "어디쯤"],
             "cancel_order": ["취소"]
         }
