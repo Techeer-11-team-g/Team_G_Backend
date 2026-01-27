@@ -56,10 +56,6 @@ services:
       - redis
       - rabbitmq
     restart: always
-    deploy:
-      resources:
-        limits:
-          memory: 4G
 
   # Celery Worker - Fitting 큐 전용 (가상 피팅)
   celery-worker-fitting:
@@ -111,7 +107,7 @@ services:
     depends_on:
       - redis
       - rabbitmq
-      - celery-worker
+      - celery-worker-default
     restart: always
 
   # Redis Exporter for Prometheus
