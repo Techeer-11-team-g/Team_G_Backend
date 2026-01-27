@@ -12,7 +12,7 @@ bind = os.getenv('GUNICORN_BIND', '0.0.0.0:8000')
 # Workers - (2 * CPU cores) + 1 권장
 # gevent 사용 시 더 적은 워커로도 높은 동시성 처리 가능
 cpu_count = multiprocessing.cpu_count()
-workers = int(os.getenv('GUNICORN_WORKERS', str(cpu_count * 2 + 1)))
+workers = int(os.getenv('GUNICORN_WORKERS', '2'))
 
 # Worker class - gthread for thread-based concurrency (safer with PyMySQL)
 worker_class = os.getenv('GUNICORN_WORKER_CLASS', 'gthread')
