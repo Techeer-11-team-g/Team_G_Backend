@@ -43,7 +43,7 @@ services:
   # Celery Worker - Analysis 큐 전용 (이미지 분석, 임베딩 생성)
   celery-worker-analysis:
     image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
-    command: celery -A config worker -Q analysis -l info --concurrency=30 --pool=gevent -n analysis@%h
+    command: celery -A config worker -Q analysis -l info --concurrency=15 --pool=gevent -n analysis@%h
     volumes:
       - log_volume:/app/logs
       - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
@@ -60,7 +60,7 @@ services:
   # Celery Worker - Fitting 큐 전용 (가상 피팅)
   celery-worker-fitting:
     image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
-    command: celery -A config worker -Q fitting -l info --concurrency=10 --pool=gevent -n fitting@%h
+    command: celery -A config worker -Q fitting -l info --concurrency=5 --pool=gevent -n fitting@%h
     volumes:
       - log_volume:/app/logs
       - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
@@ -77,7 +77,7 @@ services:
   # Celery Worker - Default 큐 (일반 태스크)
   celery-worker-default:
     image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
-    command: celery -A config worker -Q default -l info --concurrency=20 --pool=gevent -n default@%h
+    command: celery -A config worker -Q default -l info --concurrency=10 --pool=gevent -n default@%h
     volumes:
       - log_volume:/app/logs
       - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
