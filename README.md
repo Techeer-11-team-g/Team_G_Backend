@@ -30,6 +30,10 @@
 
 # 📣 Introduction
 
+<p align="center">
+<img src="docs/images/Convert to GIF project.gif" alt="Introduction"/>
+</p>
+
 ## URL
 > https://www.dressense.store/
 
