@@ -2,7 +2,7 @@
 # Queue Server (GCE VM 2)
 # - Redis
 # - RabbitMQ
-# - Celery Workers (analysis, fitting, default)
+# - Celery Workers (analysis, fitting)
 #
 # 외부 API 통신: OpenAI, Google Vision API, fashn-ai
 # =============================================================================
@@ -61,23 +61,6 @@ services:
   celery-worker-fitting:
     image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
     command: celery -A config worker -Q fitting -l info --concurrency=5 --pool=gevent -n fitting@%h
-    volumes:
-      - log_volume:/app/logs
-      - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
-    env_file:
-      - .env
-    environment:
-      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-rabbitmq123}@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
-    depends_on:
-      - redis
-      - rabbitmq
-    restart: always
-
-  # Celery Worker - Default 큐 (일반 태스크)
-  celery-worker-default:
-    image: asia-northeast3-docker.pkg.dev/${GCP_PROJECT_ID:-sodium-ray-484105-d3}/team-g/team-g-backend:latest
-    command: celery -A config worker -Q default -l info --concurrency=10 --pool=gevent -n default@%h
     volumes:
       - log_volume:/app/logs
       - /home/jwon000310/sodium-ray-484105-d3-49c57ef84014.json:/app/credentials.json:ro
