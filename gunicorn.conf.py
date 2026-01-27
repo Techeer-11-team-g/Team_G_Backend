@@ -14,10 +14,13 @@ bind = os.getenv('GUNICORN_BIND', '0.0.0.0:8000')
 cpu_count = multiprocessing.cpu_count()
 workers = int(os.getenv('GUNICORN_WORKERS', str(cpu_count * 2 + 1)))
 
-# Worker class - gevent for async I/O (requires gevent package)
-worker_class = os.getenv('GUNICORN_WORKER_CLASS', 'gevent')
+# Worker class - gthread for thread-based concurrency (safer with PyMySQL)
+worker_class = os.getenv('GUNICORN_WORKER_CLASS', 'gthread')
 
-# Connections per worker (gevent/eventlet only)
+# Threads per worker (gthread only)
+threads = int(os.getenv('GUNICORN_THREADS', '4'))
+
+# Connections per worker (gevent/eventlet only, ignored for gthread)
 worker_connections = int(os.getenv('GUNICORN_WORKER_CONNECTIONS', '1000'))
 
 # Timeout
