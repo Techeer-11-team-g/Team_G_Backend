@@ -148,8 +148,9 @@ class UserOnboardingSerializer(UserFieldsMixin, serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'user_email', 'address', 'phone_number', 
-            'payment', 'user_id', 'user_name', 'updated_at'
+            'user_email', 'address', 'phone_number',
+            'payment', 'height', 'weight',
+            'user_id', 'user_name', 'updated_at'
         ]
 
 
@@ -180,14 +181,16 @@ class UserProfileSerializer(UserFieldsMixin, serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            'user_id', 
-            'user_name', 
-            'user_email', 
-            'phone_number', 
-            'address', 
-            'birth_date', 
-            'user_image_url', 
-            'payment', 
+            'user_id',
+            'user_name',
+            'user_email',
+            'phone_number',
+            'address',
+            'birth_date',
+            'user_image_url',
+            'payment',
+            'height',
+            'weight',
             'updated_at',
             'created_at'
         ]

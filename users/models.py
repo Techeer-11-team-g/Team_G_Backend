@@ -46,6 +46,20 @@ class User(AbstractUser):
         null=True,
         verbose_name='전화번호',
     )
+    height = models.DecimalField(
+        max_digits=5,
+        decimal_places=1,
+        blank=True,
+        null=True,
+        verbose_name='키(cm)',
+    )
+    weight = models.DecimalField(
+        max_digits=5,
+        decimal_places=1,
+        blank=True,
+        null=True,
+        verbose_name='몸무게(kg)',
+    )
     payment = models.CharField(
         max_length=100,
         blank=True,
