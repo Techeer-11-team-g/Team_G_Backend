@@ -462,6 +462,20 @@ class ResponseBuilder:
         }
 
     @staticmethod
+    def out_of_scope() -> Dict[str, Any]:
+        """패션 범위 밖 입력 응답"""
+        return {
+            "text": "저는 패션 쇼핑 전문 어시스턴트예요! "
+                    "상품 검색, 가상 피팅, 장바구니 관리를 도와드릴 수 있어요.",
+            "type": "out_of_scope",
+            "data": {},
+            "suggestions": [
+                {"label": "상품 검색", "action": "search"},
+                {"label": "사용법 안내", "action": "help"}
+            ]
+        }
+
+    @staticmethod
     def analysis_pending_for_fitting(analysis_id: int) -> Dict[str, Any]:
         """피팅을 위한 이미지 분석 대기 중"""
         return {

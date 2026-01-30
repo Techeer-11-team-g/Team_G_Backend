@@ -467,6 +467,20 @@ class MainOrchestrator:
                         "continue_pending": True
                     }
 
+            # body info 제공 대기 중 (사이즈 추천 흐름)
+            elif pending_type == 'provide_body_info':
+                body_info_pattern = re.search(
+                    r'(\d{2,3})\s*(cm|센치|센티)?\s*[\s,/]?\s*(\d{2,3})\s*(kg|킬로)?',
+                    message, re.IGNORECASE
+                )
+                if body_info_pattern:
+                    return {
+                        "intent": "commerce",
+                        "sub_intent": "size_recommend",
+                        "references": {"type": "none"},
+                        "continue_pending": True
+                    }
+
             # 피팅을 위한 상품 검색 확인 대기 중
             elif pending_type == 'confirm_search_for_fitting':
                 confirm_keywords = ["응", "ㅇㅇ", "해줘", "찾아", "그래", "좋아", "네", "예"]
@@ -657,14 +671,40 @@ class MainOrchestrator:
                 "references": {"type": "none"}
             }
 
-        # 6. 기본값: 이미지가 있으면 검색, 없으면 일반 검색으로 처리
+        # 6. 패션 관련 키워드 체크 - 있으면 검색, 없으면 out_of_scope
+        fashion_keywords = [
+            # 카테고리
+            "신발", "구두", "운동화", "스니커즈", "부츠", "로퍼", "샌들", "슬리퍼",
+            "상의", "티셔츠", "셔츠", "블라우스", "니트", "맨투맨", "후드",
+            "하의", "바지", "팬츠", "청바지", "데님", "슬랙스",
+            "아우터", "자켓", "재킷", "코트", "점퍼", "패딩", "가디건",
+            "가방", "백", "토트백", "크로스백", "백팩",
+            "모자", "캡", "비니", "치마", "스커트", "원피스", "드레스",
+            # 브랜드
+            "나이키", "nike", "아디다스", "adidas", "뉴발란스", "컨버스",
+            "반스", "자라", "유니클로", "무신사", "커버낫",
+            # 검색/피팅/커머스
+            "옷", "패션", "스타일", "코디", "사이즈", "착용", "피팅",
+            "장바구니", "주문", "배송",
+            # 색상/스타일
+            "블랙", "화이트", "검정", "흰색", "빨간", "파란", "베이지",
+            "캐주얼", "포멀", "스트릿", "미니멀", "오버핏", "슬림핏",
+        ]
+        if extracted_category or extracted_brand or any(kw in message_lower for kw in fashion_keywords):
+            return {
+                "intent": "search",
+                "sub_intent": "new_search",
+                "search_params": {
+                    "target_categories": [extracted_category] if extracted_category else [],
+                    "brand": extracted_brand
+                },
+                "references": {"type": "none"}
+            }
+
+        # 7. 패션 관련 키워드 없음 → out_of_scope
         return {
-            "intent": "search",
-            "sub_intent": "new_search",
-            "search_params": {
-                "target_categories": [extracted_category] if extracted_category else [],
-                "brand": extracted_brand
-            },
+            "intent": "general",
+            "sub_intent": "out_of_scope",
             "references": {"type": "none"}
         }
 
@@ -788,6 +828,9 @@ class MainOrchestrator:
             return ResponseBuilder.general_response(
                 "감사해요! 더 도와드릴 일이 있으면 말씀해주세요."
             )
+
+        elif sub_intent == 'out_of_scope':
+            return ResponseBuilder.out_of_scope()
 
         else:
             return ResponseBuilder.general_response(

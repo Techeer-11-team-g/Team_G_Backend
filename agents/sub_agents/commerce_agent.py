@@ -598,6 +598,18 @@ class CommerceAgent:
         if not weight:
             weight = body_info.get('weight')
 
+        # DB에서 사용자 신체 정보 조회 (메시지에 없으면)
+        if not height or not weight:
+            from users.models import User
+            try:
+                user = User.objects.get(id=self.user_id)
+                if not height and user.height:
+                    height = int(user.height)
+                if not weight and user.weight:
+                    weight = int(user.weight)
+            except User.DoesNotExist:
+                pass
+
         # 상품 확인
         selected = context.get('selected_product')
         if not selected:
@@ -610,8 +622,12 @@ class CommerceAgent:
                     "어떤 상품의 사이즈를 추천해드릴까요? 먼저 상품을 찾아주세요."
                 )
 
-        # 신체 정보가 없으면 요청
+        # 신체 정보가 없으면 요청 + pending_action 설정
         if not height or not weight:
+            context['pending_action'] = {
+                'type': 'provide_body_info',
+                'product': selected
+            }
             return ResponseBuilder.ask_body_info()
 
         # 사이즈 추천 로직
